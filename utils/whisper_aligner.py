@@ -5,6 +5,7 @@ import whisper as openai_whisper
 
 class DialogueAligner:
     def __init__(self, model_name="base"):
+        self.model_name = model_name
         # Load the native openai-whisper model
         self.model = openai_whisper.load_model(model_name)
 
@@ -24,12 +25,13 @@ class DialogueAligner:
             audio,
             language=language,
             word_timestamps=True,
-            no_speech_threshold=0.5,
-            logprob_threshold=-0.8
+            no_speech_threshold=0.3,
+            logprob_threshold=-1.0,
+            condition_on_previous_text=False
         )
         transcribed_segments = result['segments']
 
-        # 2. Match transcriptions to expected segments (Sequential/Greedy)
+        # 2. Match transcriptions to expected segments (Sequential/Aggressive)
         aligned_results = []
         last_match_idx = -1
 
@@ -42,10 +44,9 @@ class DialogueAligner:
             best_match_idx = -1
             highest_ratio = 0.0
 
-            # Search in a window after the last match
-            # Search up to 10 segments ahead to find the best match for current line
+            # 1. Try fuzzy matching in a window
             search_start = last_match_idx + 1
-            search_end = min(len(transcribed_segments), search_start + 10)
+            search_end = min(len(transcribed_segments), search_start + 15)
 
             for i in range(search_start, search_end):
                 transcribed = transcribed_segments[i]
@@ -57,8 +58,14 @@ class DialogueAligner:
                     best_match = transcribed
                     best_match_idx = i
 
-            # Only accept if ratio is good enough
-            if best_match and highest_ratio > 0.35:
+            # 2. Sequential Fallback: If no good text match, take the next chronological segment
+            # as long as it exists and isn't too far from the last one
+            if highest_ratio < 0.35 and search_start < len(transcribed_segments):
+                best_match = transcribed_segments[search_start]
+                best_match_idx = search_start
+                highest_ratio = 0.2  # Placeholder for fallback confidence
+
+            if best_match:
                 aligned_results.append({
                     'original': expected,
                     'aligned': {
@@ -70,8 +77,7 @@ class DialogueAligner:
                 })
                 last_match_idx = best_match_idx
             else:
-                # If no match found, keep the original timecode as fallback
-                # but don't advance last_match_idx so we can keep searching
+                # Fallback to metadata timing if absolutely nothing in audio
                 aligned_results.append({
                     'original': expected,
                     'aligned': None

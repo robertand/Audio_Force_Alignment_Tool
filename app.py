@@ -31,12 +31,21 @@ alignment_utils = AlignmentUtils()
 # Lazy-loaded aligner
 _aligner = None
 
-def get_aligner():
+def get_aligner(model_size="base"):
     global _aligner
-    if _aligner is None:
+    if _aligner is None or _aligner.model_name != model_size:
         from utils.whisper_aligner import DialogueAligner
-        _aligner = DialogueAligner()
+        _aligner = DialogueAligner(model_name=model_size)
     return _aligner
+
+@app.errorhandler(500)
+def handle_500(e):
+    error_details = traceback.format_exc()
+    return jsonify({
+        'success': False,
+        'error': str(e),
+        'traceback': error_details
+    }), 500
 
 @app.route('/')
 def index():
@@ -62,7 +71,8 @@ def process_audio():
         # Optional Whisper Aligner
         aligner = None
         if use_whisper:
-            aligner = get_aligner()
+            model_size = request.form.get('model_size', 'base')
+            aligner = get_aligner(model_size)
 
         for speaker in speakers_to_process:
             audio_key = f'audio_{speaker}'

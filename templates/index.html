@@ -51,8 +51,15 @@
                                     <label for="minGap" class="form-label">Min gap between segments (s)</label>
                                     <input type="number" class="form-control" id="minGap" value="0" step="0.1" min="0">
                                 </div>
-                                <div class="col-md-6 d-flex align-items-end">
-                                    <div class="form-check mb-2">
+                                <div class="col-md-6">
+                                    <label for="modelSize" class="form-label">Whisper Model Size</label>
+                                    <select class="form-select" id="modelSize">
+                                        <option value="base">Base (Fast)</option>
+                                        <option value="small">Small (Better)</option>
+                                        <option value="medium">Medium (Accurate)</option>
+                                        <option value="large-v3">Large-v3 (Maximum Accuracy)</option>
+                                    </select>
+                                    <div class="form-check mt-2">
                                         <input type="checkbox" class="form-check-input" id="useWhisper" checked>
                                         <label class="form-check-label" for="useWhisper">Use Whisper</label>
                                     </div>
@@ -161,6 +168,7 @@
             const formData = new FormData();
             formData.append('metadata_filename', currentMetadata.filename);
             formData.append('use_whisper', document.getElementById('useWhisper').checked);
+            formData.append('model_size', document.getElementById('modelSize').value);
             formData.append('min_gap', document.getElementById('minGap').value || 0);
             
             const selects = document.querySelectorAll('.speaker-select:checked');
