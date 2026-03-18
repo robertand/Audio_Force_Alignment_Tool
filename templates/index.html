@@ -52,16 +52,25 @@
                                     <input type="number" class="form-control" id="minGap" value="0" step="0.1" min="0">
                                 </div>
                                 <div class="col-md-6">
-                                    <label for="modelSize" class="form-label">Whisper Model Size</label>
-                                    <select class="form-select" id="modelSize">
-                                        <option value="base">Base (Fast)</option>
-                                        <option value="small">Small (Better)</option>
-                                        <option value="medium">Medium (Accurate)</option>
-                                        <option value="large-v3">Large-v3 (Maximum Accuracy)</option>
+                                    <label for="alignerType" class="form-label">Alignment Engine</label>
+                                    <select class="form-select mb-2" id="alignerType" onchange="updateModelOptions()">
+                                        <option value="whisper">OpenAI Whisper</option>
+                                        <option value="mms">MahmoudAshraf MMS Aligner</option>
                                     </select>
+
+                                    <div id="whisperSettings">
+                                        <label for="modelSize" class="form-label">Whisper Model Size</label>
+                                        <select class="form-select" id="modelSize">
+                                            <option value="base">Base (Fast)</option>
+                                            <option value="small">Small (Better)</option>
+                                            <option value="medium">Medium (Accurate)</option>
+                                            <option value="large-v3">Large-v3 (Maximum Accuracy)</option>
+                                        </select>
+                                    </div>
+
                                     <div class="form-check mt-2">
                                         <input type="checkbox" class="form-check-input" id="useWhisper" checked>
-                                        <label class="form-check-label" for="useWhisper">Use Whisper</label>
+                                        <label class="form-check-label" for="useWhisper">Use Aligner</label>
                                     </div>
                                 </div>
                             </div>
@@ -168,6 +177,16 @@
             });
         }
 
+        function updateModelOptions() {
+            const type = document.getElementById('alignerType').value;
+            const whisperSettings = document.getElementById('whisperSettings');
+            if (type === 'mms') {
+                whisperSettings.classList.add('d-none');
+            } else {
+                whisperSettings.classList.remove('d-none');
+            }
+        }
+
         function resetProcess() {
             document.getElementById('step1').classList.remove('d-none');
             document.getElementById('step2').classList.add('d-none');
@@ -182,9 +201,10 @@
             const formData = new FormData();
             formData.append('metadata_filename', currentMetadata.filename);
             formData.append('use_whisper', document.getElementById('useWhisper').checked);
+            formData.append('aligner_type', document.getElementById('alignerType').value);
             formData.append('model_size', document.getElementById('modelSize').value);
             formData.append('min_gap', document.getElementById('minGap').value || 0);
-            
+
             const selects = document.querySelectorAll('.speaker-select:checked');
             if (selects.length === 0) {
                 alert('Select at least one speaker to process.');

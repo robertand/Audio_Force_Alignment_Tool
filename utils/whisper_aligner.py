@@ -1,8 +1,6 @@
-import whisper_timestamped as whisper
 import numpy as np
 import difflib
 import whisper as openai_whisper
-
 import torch
 
 class DialogueAligner:

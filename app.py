@@ -28,14 +28,27 @@ audio_processor = AudioProcessor()
 vad_processor = VADProcessor()
 alignment_utils = AlignmentUtils()
 
-# Lazy-loaded aligner
+# Lazy-loaded aligners
 _aligner = None
+_aligner_type = None
 
-def get_aligner(model_size="base"):
-    global _aligner
-    if _aligner is None or _aligner.model_name != model_size:
-        from utils.whisper_aligner import DialogueAligner
-        _aligner = DialogueAligner(model_name=model_size)
+def get_aligner(model_size="base", aligner_type="whisper"):
+    global _aligner, _aligner_type
+
+    # Reload if type changed OR if model size changed (for whisper)
+    should_reload = (_aligner is None or _aligner_type != aligner_type)
+    if not should_reload and aligner_type == "whisper" and getattr(_aligner, 'model_name', None) != model_size:
+        should_reload = True
+
+    if should_reload:
+        if aligner_type == "mms":
+            from utils.mms_aligner import MMSDialogueAligner
+            _aligner = MMSDialogueAligner()
+        else:
+            from utils.whisper_aligner import DialogueAligner
+            _aligner = DialogueAligner(model_name=model_size)
+        _aligner_type = aligner_type
+
     return _aligner
 
 @app.errorhandler(500)
@@ -73,7 +86,8 @@ def process_audio():
         aligner = None
         if use_whisper:
             model_size = request.form.get('model_size', 'base')
-            aligner = get_aligner(model_size)
+            aligner_type = request.form.get('aligner_type', 'whisper')
+            aligner = get_aligner(model_size, aligner_type)
 
         for speaker in speakers_to_process:
             try:
