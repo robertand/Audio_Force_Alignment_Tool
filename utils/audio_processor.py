@@ -22,16 +22,26 @@ class AudioProcessor:
                 waveform = librosa.resample(waveform, orig_sr=sr, target_sr=self.target_sr)
                 sr = self.target_sr
                 
-        except:
+        except Exception:
             # Fallback to soundfile
-            waveform, sr = sf.read(file_path)
-            if len(waveform.shape) > 1:
-                waveform = waveform.mean(axis=1)  # Convert to mono
-            
-            if sr != self.target_sr:
-                waveform = librosa.resample(waveform, orig_sr=sr, target_sr=self.target_sr)
-                sr = self.target_sr
+            try:
+                waveform, sr = sf.read(file_path)
+                if waveform is None:
+                    raise Exception("Soundfile returned None")
+
+                if len(waveform.shape) > 1:
+                    waveform = waveform.mean(axis=1)  # Convert to mono
+
+                if sr != self.target_sr:
+                    waveform = librosa.resample(waveform, orig_sr=sr, target_sr=self.target_sr)
+                    sr = self.target_sr
+            except Exception as e:
+                raise Exception(f"Failed to load audio file {file_path}: {str(e)}")
         
+        # Ensure waveform is not None before normalization
+        if waveform is None:
+            raise Exception(f"Failed to load audio from {file_path}")
+
         # Normalize
         waveform = waveform / np.max(np.abs(waveform) + 1e-8)
         
@@ -44,10 +54,10 @@ class AudioProcessor:
         """
         target_sample = int(target_time * sr)
         window_samples = int(search_window * sr)
-        
+
         start_search = max(0, target_sample - window_samples // 2)
         end_search = min(len(audio), target_sample + window_samples // 2)
-        
+
         search_region = audio[start_search:end_search]
 
         if len(search_region) < 2:
