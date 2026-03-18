@@ -1,21 +1,29 @@
 import whisper_timestamped as whisper
 import numpy as np
 import difflib
+import whisper as openai_whisper
 
 class DialogueAligner:
     def __init__(self, model_name="base"):
-        self.model = whisper.load_model(model_name)
+        # Load the native openai-whisper model
+        self.model = openai_whisper.load_model(model_name)
 
     def align_character_audio(self, audio_path, expected_segments, language="ro"):
         """
         Transcribe audio and align with expected segments from metadata
         """
-        # 1. Transcribe with timestamps
-        result = whisper.transcribe(self.model, audio_path, language=language)
+        # 1. Transcribe with timestamps using native whisper
+        # This avoids the ffmpeg requirement for some operations and the hook issues
+        # although whisper itself might still want ffmpeg for loading if it's not a numpy array.
+
+        # To avoid ffmpeg in whisper.load_audio, we can load it ourselves
+        import librosa
+        audio, sr = librosa.load(audio_path, sr=16000)
+
+        result = self.model.transcribe(audio, language=language, word_timestamps=True)
         transcribed_segments = result['segments']
 
         # 2. Match transcriptions to expected segments
-        # We'll use a simple matching logic based on text similarity
         aligned_results = []
 
         for expected in expected_segments:

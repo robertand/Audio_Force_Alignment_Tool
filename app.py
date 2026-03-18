@@ -28,6 +28,16 @@ audio_processor = AudioProcessor()
 vad_processor = VADProcessor()
 alignment_utils = AlignmentUtils()
 
+# Lazy-loaded aligner
+_aligner = None
+
+def get_aligner():
+    global _aligner
+    if _aligner is None:
+        from utils.whisper_aligner import DialogueAligner
+        _aligner = DialogueAligner()
+    return _aligner
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -51,8 +61,7 @@ def process_audio():
         # Optional Whisper Aligner
         aligner = None
         if use_whisper:
-            from utils.whisper_aligner import DialogueAligner
-            aligner = DialogueAligner()
+            aligner = get_aligner()
 
         for speaker in speakers_to_process:
             audio_key = f'audio_{speaker}'
