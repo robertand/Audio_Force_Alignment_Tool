@@ -20,11 +20,18 @@ class DialogueAligner:
         import librosa
         audio, sr = librosa.load(audio_path, sr=16000)
 
-        result = self.model.transcribe(audio, language=language, word_timestamps=True)
+        result = self.model.transcribe(
+            audio,
+            language=language,
+            word_timestamps=True,
+            no_speech_threshold=0.5,
+            logprob_threshold=-0.8
+        )
         transcribed_segments = result['segments']
 
-        # 2. Match transcriptions to expected segments
+        # 2. Match transcriptions to expected segments (Sequential/Greedy)
         aligned_results = []
+        last_match_idx = -1
 
         for expected in expected_segments:
             expected_text = expected.get('text_ro', '').strip()
@@ -32,18 +39,26 @@ class DialogueAligner:
                 continue
 
             best_match = None
+            best_match_idx = -1
             highest_ratio = 0.0
 
-            for transcribed in transcribed_segments:
+            # Search in a window after the last match
+            # Search up to 10 segments ahead to find the best match for current line
+            search_start = last_match_idx + 1
+            search_end = min(len(transcribed_segments), search_start + 10)
+
+            for i in range(search_start, search_end):
+                transcribed = transcribed_segments[i]
                 trans_text = transcribed['text'].strip()
                 ratio = difflib.SequenceMatcher(None, expected_text.lower(), trans_text.lower()).ratio()
 
                 if ratio > highest_ratio:
                     highest_ratio = ratio
                     best_match = transcribed
+                    best_match_idx = i
 
             # Only accept if ratio is good enough
-            if best_match and highest_ratio > 0.4:
+            if best_match and highest_ratio > 0.35:
                 aligned_results.append({
                     'original': expected,
                     'aligned': {
@@ -53,8 +68,10 @@ class DialogueAligner:
                         'confidence': highest_ratio
                     }
                 })
+                last_match_idx = best_match_idx
             else:
                 # If no match found, keep the original timecode as fallback
+                # but don't advance last_match_idx so we can keep searching
                 aligned_results.append({
                     'original': expected,
                     'aligned': None

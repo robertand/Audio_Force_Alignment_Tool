@@ -127,10 +127,12 @@ def process_audio():
         })
         
     except Exception as e:
-        traceback.print_exc()
+        error_details = traceback.format_exc()
+        print(f"Error in process_audio: {error_details}")
         return jsonify({
             'success': False,
-            'error': str(e)
+            'error': str(e),
+            'traceback': error_details
         }), 500
     finally:
         # Cleanup temp files after sending response
