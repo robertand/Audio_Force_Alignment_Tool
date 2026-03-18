@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio Force Alignment Tool</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container mt-5">
+        <h1 class="text-center mb-4">Audio Force Alignment Tool</h1>
+        
+        <div class="row">
+            <div class="col-md-6 offset-md-3">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Upload Files</h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="uploadForm" enctype="multipart/form-data">
+                            <div class="mb-3">
+                                <label for="audioFile" class="form-label">Audio File (WAV/MP3)</label>
+                                <input type="file" class="form-control" id="audioFile" name="audio" accept="audio/*" required>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="csvFile" class="form-label">CSV File (with start,end,speaker,en,ro)</label>
+                                <input type="file" class="form-control" id="csvFile" name="csv" accept=".csv" required>
+                                <small class="text-muted">Format: start,end,speaker,en,ro</small>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="timecodeFile" class="form-label">Timecode JSON (optional)</label>
+                                <input type="file" class="form-control" id="timecodeFile" name="timecode" accept=".json">
+                            </div>
+                            
+                            <button type="submit" class="btn btn-primary w-100" id="processBtn">
+                                Process Alignment
+                            </button>
+                        </form>
+                        
+                        <div class="progress mt-3 d-none" id="progressBar">
+                            <div class="progress-bar progress-bar-striped progress-bar-animated" 
+                                 role="progressbar" style="width: 100%">Processing...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="row mt-4 d-none" id="resultsSection">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Processing Results</h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="results"></div>
+                        <div class="mt-3">
+                            <button class="btn btn-success" onclick="downloadAll()">Download All Segments</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const formData = new FormData();
+            formData.append('audio', document.getElementById('audioFile').files[0]);
+            formData.append('csv', document.getElementById('csvFile').files[0]);
+            
+            const timecodeFile = document.getElementById('timecodeFile').files[0];
+            if (timecodeFile) {
+                formData.append('timecode', timecodeFile);
+            }
+            
+            // Show progress
+            document.getElementById('progressBar').classList.remove('d-none');
+            document.getElementById('processBtn').disabled = true;
+            
+            try {
+                const response = await fetch('/process', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    displayResults(result);
+                } else {
+                    alert('Error: ' + result.error);
+                }
+            } catch (error) {
+                alert('Error processing files: ' + error.message);
+            } finally {
+                document.getElementById('progressBar').classList.add('d-none');
+                document.getElementById('processBtn').disabled = false;
+            }
+        });
+        
+        function displayResults(data) {
+            const resultsDiv = document.getElementById('results');
+            document.getElementById('resultsSection').classList.remove('d-none');
+            
+            let html = '<h6>Segments Created:</h6>';
+            html += '<div class="list-group">';
+            
+            data.output_files.segments.forEach(segment => {
+                html += `
+                    <div class="list-group-item">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <strong>${segment.speaker}</strong> (${segment.start.toFixed(2)}s - ${segment.end.toFixed(2)}s)
+                                <br>
+                                <small>EN: ${segment.text_en || 'N/A'}</small>
+                                <br>
+                                <small>RO: ${segment.text_ro || 'N/A'}</small>
+                            </div>
+                            <div>
+                                <audio controls src="/preview/${segment.file}"></audio>
+                                <a href="/download/${segment.file}" class="btn btn-sm btn-primary">Download</a>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            html += '</div>';
+            
+            if (data.output_files.details) {
+                html += '<h6 class="mt-4">Alignment Details:</h6>';
+                html += '<table class="table table-sm">';
+                html += '<thead><tr><th>Segment</th><th>Speaker</th><th>Original</th><th>Adjusted</th><th>VAD Confidence</th></tr></thead>';
+                html += '<tbody>';
+                
+                data.output_files.details.forEach(detail => {
+                    html += `
+                        <tr>
+                            <td>${detail.segment}</td>
+                            <td>${detail.speaker}</td>
+                            <td>${detail.original_start.toFixed(2)}s - ${detail.original_end.toFixed(2)}s</td>
+                            <td>${detail.adjusted_start.toFixed(2)}s - ${detail.adjusted_end.toFixed(2)}s</td>
+                            <td>${(detail.vad_confidence * 100).toFixed(1)}%</td>
+                        </tr>
+                    `;
+                });
+                
+                html += '</tbody></table>';
+            }
+            
+            resultsDiv.innerHTML = html;
+        }
+        
+        function downloadAll() {
+            window.location.href = '/download/concatenated_output.wav';
+        }
+    </script>
+</body>
+</html>
