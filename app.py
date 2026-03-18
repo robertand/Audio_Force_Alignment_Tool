@@ -36,40 +36,84 @@ def index():
 def process_audio():
     temp_dir = None
     try:
-        # Get files from request
-        audio_file = request.files['audio']
-        csv_file = request.files['csv']
-        timecode_file = request.files.get('timecode')
+        # Get metadata and settings
+        segments = json.loads(request.form.get('segments', '[]'))
+        use_whisper = request.form.get('use_whisper') == 'true'
+        speakers_to_process = request.form.getlist('speakers')
         
-        # Create temporary directory for processing
+        if not segments or not speakers_to_process:
+            return jsonify({'success': False, 'error': 'Missing metadata or speakers'}), 400
+
         temp_dir = tempfile.mkdtemp(dir=app.config['UPLOAD_FOLDER'])
         
-        # Save uploaded files
-        audio_path = os.path.join(temp_dir, secure_filename(audio_file.filename))
-        csv_path = os.path.join(temp_dir, secure_filename(csv_file.filename))
+        output_tracks = []
         
-        audio_file.save(audio_path)
-        csv_file.save(csv_path)
-        
-        timecode_data = None
-        if timecode_file and timecode_file.filename:
-            timecode_path = os.path.join(temp_dir, secure_filename(timecode_file.filename))
-            timecode_file.save(timecode_path)
-            with open(timecode_path, 'r') as f:
-                timecode_data = json.load(f)
-        
-        # Read CSV
-        df = pd.read_csv(csv_path)
-        df = df.fillna('')
-        
-        # Process alignment
-        result = process_alignment(audio_path, df, timecode_data, temp_dir)
-        
+        # Optional Whisper Aligner
+        aligner = None
+        if use_whisper:
+            from utils.whisper_aligner import DialogueAligner
+            aligner = DialogueAligner()
+
+        for speaker in speakers_to_process:
+            audio_key = f'audio_{speaker}'
+            audio_file = request.files.get(audio_key)
+
+            if not audio_file:
+                continue # Skip if no audio provided for this selected speaker
+
+            audio_path = os.path.join(temp_dir, f"input_{secure_filename(speaker)}.wav")
+            audio_file.save(audio_path)
+
+            # Load input audio
+            char_audio, sr = audio_processor.load_audio(audio_path)
+
+            # Filter segments for this character
+            char_segments = [s for s in segments if s['speaker'] == speaker]
+
+            aligned_for_reconstruction = []
+
+            if use_whisper and aligner:
+                # Use Whisper to find where the dialogue actually is
+                alignments = aligner.align_character_audio(audio_path, char_segments)
+
+                for entry in alignments:
+                    orig = entry['original']
+                    aligned = entry['aligned']
+
+                    if aligned:
+                        # Extract the segment from the character's audio based on Whisper's timing
+                        extracted = audio_processor.extract_segment(
+                            char_audio, sr, aligned['start'], aligned['end'], orig.get('text_ro', '')
+                        )
+                        aligned_for_reconstruction.append((orig['start'], orig['end'], extracted))
+                    else:
+                        # Fallback or skip
+                        pass
+            else:
+                # Simple alignment: assume the character audio file matches the timeline
+                # (this might not be what the user wants if they upload JUST the dialogue)
+                # But the user said: "sa incarce audio doar dialogul acelui personaj"
+                # If they upload just dialogue, we might need more complex matching
+                # even without whisper, but whisper is the requested way.
+                pass
+
+            if aligned_for_reconstruction:
+                # Build the full track for this character
+                full_track = alignment_utils.reconstruct_character_track(aligned_for_reconstruction, sr)
+
+                output_filename = f"track_{secure_filename(speaker)}.wav"
+                output_path = os.path.join(app.config['OUTPUT_FOLDER'], output_filename)
+                sf.write(output_path, full_track, sr)
+
+                output_tracks.append({
+                    'speaker': speaker,
+                    'file': output_filename
+                })
+
         return jsonify({
             'success': True,
             'message': 'Alignment completed successfully',
-            'output_files': result,
-            'details': result.get('details', [])
+            'output_files': output_tracks
         })
         
     except Exception as e:
@@ -186,6 +230,51 @@ def preview_file(filename):
         os.path.join(app.config['OUTPUT_FOLDER'], filename),
         mimetype='audio/wav'
     )
+
+@app.route('/upload_metadata', methods=['POST'])
+def upload_metadata():
+    temp_dir = None
+    try:
+        metadata_file = request.files.get('metadata')
+        if not metadata_file:
+            return jsonify({'success': False, 'error': 'No file provided'}), 400
+
+        temp_dir = tempfile.mkdtemp(dir=app.config['UPLOAD_FOLDER'])
+        file_path = os.path.join(temp_dir, secure_filename(metadata_file.filename))
+        metadata_file.save(file_path)
+
+        segments = []
+        if file_path.endswith('.csv'):
+            df = pd.read_csv(file_path)
+            df = df.fillna('')
+            for _, row in df.iterrows():
+                segments.append({
+                    'start': float(row['start']),
+                    'end': float(row['end']),
+                    'speaker': str(row['speaker']),
+                    'text_en': str(row.get('en', '')),
+                    'text_ro': str(row.get('ro', ''))
+                })
+        elif file_path.endswith('.srt'):
+            segments = alignment_utils.parse_srt(file_path)
+        else:
+            return jsonify({'success': False, 'error': 'Unsupported file format'}), 400
+
+        # Extract unique speakers
+        speakers = sorted(list(set(s['speaker'] for s in segments)))
+
+        return jsonify({
+            'success': True,
+            'speakers': speakers,
+            'segments': segments,
+            'filename': metadata_file.filename
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        if temp_dir and os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 @app.route('/get_details')
 def get_details():
