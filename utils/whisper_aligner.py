@@ -33,10 +33,14 @@ class DialogueAligner:
                 logprob_threshold=-1.0,
                 condition_on_previous_text=False
             )
-        except RuntimeError as e:
-            if "tensor" in str(e).lower() or "size" in str(e).lower():
-                print(f"Whisper word_timestamps failed with tensor error, retrying without it: {e}")
+        except (RuntimeError, ValueError, TypeError) as e:
+            # Catching more than just RuntimeError as Whisper/Torch errors can sometimes
+            # manifest as other types depending on where the dimension mismatch is caught
+            err_msg = str(e).lower()
+            if "tensor" in err_msg or "size" in err_msg or "dimension" in err_msg or "match" in err_msg:
+                print(f"Whisper word_timestamps failed ({type(e).__name__}), retrying without it: {e}")
                 # Fallback: transcribe without word timestamps to avoid tensor dimension mismatch errors
+                # This uses segment-level timestamps which are more stable
                 result = self.model.transcribe(
                     audio,
                     language=language,

@@ -212,6 +212,7 @@ class AlignmentUtils:
         Place aligned audio segments on a track.
         - Respects target timecodes but "pushes" segments forward if they overlap.
         - Never truncates audio segments.
+        - Maintains absolute synchronization with CSV timecodes where possible.
         aligned_segments: list of (target_start, target_end, audio_segment)
         """
         if not aligned_segments:
@@ -220,12 +221,13 @@ class AlignmentUtils:
         # Sort by target start time
         aligned_segments.sort(key=lambda x: x[0])
 
-        # Calculate final placements to determine track duration
+        # Calculate final placements
         placements = []
         current_time = 0.0
 
         for target_start, target_end, audio_seg in aligned_segments:
             # Rule: place at target_start UNLESS it overlaps with previous + min_gap
+            # If target_start is later than current_time, we "snap" back to target_start
             actual_start = max(target_start, current_time + min_gap if current_time > 0 else target_start)
             duration = len(audio_seg) / sr
             actual_end = actual_start + duration
@@ -236,13 +238,23 @@ class AlignmentUtils:
         if not placements:
             return np.array([])
 
-        # Create full track
+        # The total duration should at least be the end of the last placement
         total_duration = current_time
-        full_track = np.zeros(int(total_duration * sr) + 1)
+
+        # Determine the absolute max end time from the original metadata to ensure sync with other tracks
+        abs_max_end = max(s[1] for s in aligned_segments)
+        total_duration = max(total_duration, abs_max_end)
+
+        full_track = np.zeros(int(total_duration * sr) + sr) # Extra second for safety
 
         for start_time, audio_seg in placements:
             start_sample = int(start_time * sr)
             end_sample = start_sample + len(audio_seg)
+
+            # Ensure we don't exceed track length (shouldn't happen with our total_duration calculation)
+            if end_sample > len(full_track):
+                end_sample = len(full_track)
+                audio_seg = audio_seg[:end_sample - start_sample]
 
             # Place audio segment
             full_track[start_sample:end_sample] = audio_seg
