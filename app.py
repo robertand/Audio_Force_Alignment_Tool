@@ -49,6 +49,7 @@ def process_audio():
         # Get metadata and settings
         segments = json.loads(request.form.get('segments', '[]'))
         use_whisper = request.form.get('use_whisper') == 'true'
+        min_gap = float(request.form.get('min_gap', 0))
         speakers_to_process = request.form.getlist('speakers')
         
         if not segments or not speakers_to_process:
@@ -108,7 +109,7 @@ def process_audio():
 
             if aligned_for_reconstruction:
                 # Build the full track for this character
-                full_track = alignment_utils.reconstruct_character_track(aligned_for_reconstruction, sr)
+                full_track = alignment_utils.reconstruct_character_track(aligned_for_reconstruction, sr, min_gap=min_gap)
 
                 output_filename = f"track_{secure_filename(speaker)}.wav"
                 output_path = os.path.join(app.config['OUTPUT_FOLDER'], output_filename)

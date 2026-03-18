@@ -207,28 +207,44 @@ class AlignmentUtils:
             })
         return segments
 
-    def reconstruct_character_track(self, aligned_segments, sr):
+    def reconstruct_character_track(self, aligned_segments, sr, min_gap=0.0):
         """
-        Place aligned audio segments on a silent track at their target timecodes.
+        Place aligned audio segments on a track.
+        - Respects target timecodes but "pushes" segments forward if they overlap.
+        - Never truncates audio segments.
         aligned_segments: list of (target_start, target_end, audio_segment)
         """
         if not aligned_segments:
             return np.array([])
 
-        # Find required total duration
-        max_end = max(s[1] for s in aligned_segments)
-        full_track = np.zeros(int(max_end * sr))
+        # Sort by target start time
+        aligned_segments.sort(key=lambda x: x[0])
+
+        # Calculate final placements to determine track duration
+        placements = []
+        current_time = 0.0
 
         for target_start, target_end, audio_seg in aligned_segments:
-            start_sample = int(target_start * sr)
+            # Rule: place at target_start UNLESS it overlaps with previous + min_gap
+            actual_start = max(target_start, current_time + min_gap if current_time > 0 else target_start)
+            duration = len(audio_seg) / sr
+            actual_end = actual_start + duration
+
+            placements.append((actual_start, audio_seg))
+            current_time = actual_end
+
+        if not placements:
+            return np.array([])
+
+        # Create full track
+        total_duration = current_time
+        full_track = np.zeros(int(total_duration * sr) + 1)
+
+        for start_time, audio_seg in placements:
+            start_sample = int(start_time * sr)
             end_sample = start_sample + len(audio_seg)
 
-            # Ensure we don't exceed track length
-            if end_sample > len(full_track):
-                end_sample = len(full_track)
-                audio_seg = audio_seg[:end_sample - start_sample]
-
-            # Place audio segment (or use a small crossfade/add to existing)
+            # Place audio segment
             full_track[start_sample:end_sample] = audio_seg
 
         return full_track
