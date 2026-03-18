@@ -122,13 +122,27 @@
             }
         });
 
+        function toggleAll(checked) {
+            document.querySelectorAll('.speaker-select').forEach(cb => {
+                cb.checked = checked;
+            });
+        }
+
         function showStep2(data) {
             document.getElementById('step1').classList.add('d-none');
             document.getElementById('step2').classList.remove('d-none');
             document.getElementById('metadataInfo').innerText = `File: ${data.filename} | Detected ${data.speakers.length} speakers.`;
 
             const slotsDiv = document.getElementById('characterSlots');
-            slotsDiv.innerHTML = '<h6>Assign audio for each character:</h6>';
+            slotsDiv.innerHTML = `
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h6>Assign audio for each character:</h6>
+                    <div>
+                        <button type="button" class="btn btn-xs btn-outline-primary py-0" onclick="toggleAll(true)">Select All</button>
+                        <button type="button" class="btn btn-xs btn-outline-secondary py-0" onclick="toggleAll(false)">Deselect All</button>
+                    </div>
+                </div>
+            `;
 
             data.speakers.forEach((speaker, index) => {
                 const count = data.segments.filter(s => s.speaker === speaker).length;

@@ -67,6 +67,7 @@ def process_audio():
         temp_dir = tempfile.mkdtemp(dir=app.config['UPLOAD_FOLDER'])
         
         output_tracks = []
+        failed_speakers = []
         
         # Optional Whisper Aligner
         aligner = None
@@ -75,65 +76,69 @@ def process_audio():
             aligner = get_aligner(model_size)
 
         for speaker in speakers_to_process:
-            audio_key = f'audio_{speaker}'
-            audio_file = request.files.get(audio_key)
+            try:
+                audio_key = f'audio_{speaker}'
+                audio_file = request.files.get(audio_key)
 
-            if not audio_file:
-                continue # Skip if no audio provided for this selected speaker
+                if not audio_file:
+                    continue # Skip if no audio provided for this selected speaker
 
-            audio_path = os.path.join(temp_dir, f"input_{secure_filename(speaker)}.wav")
-            audio_file.save(audio_path)
+                audio_path = os.path.join(temp_dir, f"input_{secure_filename(speaker)}.wav")
+                audio_file.save(audio_path)
 
-            # Load input audio
-            char_audio, sr = audio_processor.load_audio(audio_path)
+                # Load input audio
+                char_audio, sr = audio_processor.load_audio(audio_path)
 
-            # Filter segments for this character
-            char_segments = [s for s in segments if s['speaker'] == speaker]
+                # Filter segments for this character
+                char_segments = [s for s in segments if s['speaker'] == speaker]
 
-            aligned_for_reconstruction = []
+                aligned_for_reconstruction = []
 
-            if use_whisper and aligner:
-                # Use Whisper to find where the dialogue actually is
-                alignments = aligner.align_character_audio(audio_path, char_segments)
+                if use_whisper and aligner:
+                    # Use Whisper to find where the dialogue actually is
+                    alignments = aligner.align_character_audio(audio_path, char_segments)
 
-                for entry in alignments:
-                    orig = entry['original']
-                    aligned = entry['aligned']
+                    for entry in alignments:
+                        orig = entry['original']
+                        aligned = entry['aligned']
 
-                    if aligned:
-                        # Extract the segment from the character's audio based on Whisper's timing
-                        extracted = audio_processor.extract_segment(
-                            char_audio, sr, aligned['start'], aligned['end'], orig.get('text_ro', '')
-                        )
-                        aligned_for_reconstruction.append((orig['start'], orig['end'], extracted))
-                    else:
-                        # Fallback or skip
-                        pass
-            else:
-                # Simple alignment: assume the character audio file matches the timeline
-                # (this might not be what the user wants if they upload JUST the dialogue)
-                # But the user said: "sa incarce audio doar dialogul acelui personaj"
-                # If they upload just dialogue, we might need more complex matching
-                # even without whisper, but whisper is the requested way.
-                pass
+                        if aligned:
+                            # Extract the segment from the character's audio based on Whisper's timing
+                            extracted = audio_processor.extract_segment(
+                                char_audio, sr, aligned['start'], aligned['end'], orig.get('text_ro', '')
+                            )
+                            aligned_for_reconstruction.append((orig['start'], orig['end'], extracted))
+                        else:
+                            # Fallback or skip
+                            pass
+                else:
+                    # Simple alignment
+                    pass
 
-            if aligned_for_reconstruction:
-                # Build the full track for this character
-                full_track = alignment_utils.reconstruct_character_track(aligned_for_reconstruction, sr, min_gap=min_gap)
+                if aligned_for_reconstruction:
+                    # Build the full track for this character
+                    full_track = alignment_utils.reconstruct_character_track(aligned_for_reconstruction, sr, min_gap=min_gap)
 
-                output_filename = f"track_{secure_filename(speaker)}.wav"
-                output_path = os.path.join(app.config['OUTPUT_FOLDER'], output_filename)
-                sf.write(output_path, full_track, sr)
+                    output_filename = f"track_{secure_filename(speaker)}.wav"
+                    output_path = os.path.join(app.config['OUTPUT_FOLDER'], output_filename)
+                    sf.write(output_path, full_track, sr)
 
-                output_tracks.append({
+                    output_tracks.append({
+                        'speaker': speaker,
+                        'file': output_filename
+                    })
+            except Exception as speaker_err:
+                traceback.print_exc()
+                failed_speakers.append({
                     'speaker': speaker,
-                    'file': output_filename
+                    'error': str(speaker_err)
                 })
 
         return jsonify({
             'success': True,
-            'message': 'Alignment completed successfully',
-            'output_files': output_tracks
+            'message': 'Alignment completed successfully' if not failed_speakers else 'Alignment completed with partial errors',
+            'output_files': output_tracks,
+            'failed_speakers': failed_speakers
         })
         
     except Exception as e:

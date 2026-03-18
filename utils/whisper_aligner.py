@@ -3,11 +3,14 @@ import numpy as np
 import difflib
 import whisper as openai_whisper
 
+import torch
+
 class DialogueAligner:
     def __init__(self, model_name="base"):
         self.model_name = model_name
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
         # Load the native openai-whisper model
-        self.model = openai_whisper.load_model(model_name)
+        self.model = openai_whisper.load_model(model_name, device=self.device)
 
     def align_character_audio(self, audio_path, expected_segments, language="ro"):
         """
@@ -21,14 +24,29 @@ class DialogueAligner:
         import librosa
         audio, sr = librosa.load(audio_path, sr=16000)
 
-        result = self.model.transcribe(
-            audio,
-            language=language,
-            word_timestamps=True,
-            no_speech_threshold=0.3,
-            logprob_threshold=-1.0,
-            condition_on_previous_text=False
-        )
+        try:
+            result = self.model.transcribe(
+                audio,
+                language=language,
+                word_timestamps=True,
+                no_speech_threshold=0.3,
+                logprob_threshold=-1.0,
+                condition_on_previous_text=False
+            )
+        except RuntimeError as e:
+            if "tensor" in str(e).lower() or "size" in str(e).lower():
+                print(f"Whisper word_timestamps failed with tensor error, retrying without it: {e}")
+                # Fallback: transcribe without word timestamps to avoid tensor dimension mismatch errors
+                result = self.model.transcribe(
+                    audio,
+                    language=language,
+                    word_timestamps=False,
+                    no_speech_threshold=0.3,
+                    logprob_threshold=-1.0,
+                    condition_on_previous_text=False
+                )
+            else:
+                raise e
         transcribed_segments = result['segments']
 
         # 2. Match transcriptions to expected segments (Sequential/Aggressive)
