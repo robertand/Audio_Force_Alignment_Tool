@@ -11,33 +11,46 @@
     <div class="container mt-5">
         <h1 class="text-center mb-4">Audio Force Alignment Tool</h1>
         
-        <div class="row">
+        <!-- Step 1: Upload Metadata -->
+        <div class="row" id="step1">
             <div class="col-md-6 offset-md-3">
                 <div class="card">
                     <div class="card-header">
-                        <h5>Upload Files</h5>
+                        <h5>Step 1: Upload Metadata (CSV or SRT)</h5>
                     </div>
                     <div class="card-body">
-                        <form id="uploadForm" enctype="multipart/form-data">
+                        <form id="metadataForm">
                             <div class="mb-3">
-                                <label for="audioFile" class="form-label">Audio File (WAV/MP3)</label>
-                                <input type="file" class="form-control" id="audioFile" name="audio" accept="audio/*" required>
+                                <label for="metadataFile" class="form-label">Metadata File (CSV/SRT)</label>
+                                <input type="file" class="form-control" id="metadataFile" accept=".csv,.srt" required>
+                                <small class="text-muted">CSV format: start,end,speaker,en,ro. SRT format is also supported.</small>
                             </div>
-                            
-                            <div class="mb-3">
-                                <label for="csvFile" class="form-label">CSV File (with start,end,speaker,en,ro)</label>
-                                <input type="file" class="form-control" id="csvFile" name="csv" accept=".csv" required>
-                                <small class="text-muted">Format: start,end,speaker,en,ro</small>
+                            <button type="submit" class="btn btn-primary w-100" id="analyzeBtn">Analyze Metadata</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 2: Character Audio Slots -->
+        <div class="row d-none" id="step2">
+            <div class="col-md-8 offset-md-2">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5>Step 2: Upload Character Audio</h5>
+                        <button class="btn btn-sm btn-outline-secondary" onclick="resetProcess()">Reset</button>
+                    </div>
+                    <div class="card-body">
+                        <p id="metadataInfo" class="mb-3"></p>
+                        <form id="processForm">
+                            <div id="characterSlots" class="mb-4">
+                                <!-- Character slots will be inserted here -->
                             </div>
-                            
-                            <div class="mb-3">
-                                <label for="timecodeFile" class="form-label">Timecode JSON (optional)</label>
-                                <input type="file" class="form-control" id="timecodeFile" name="timecode" accept=".json">
+                            <div class="mb-3 form-check">
+                                <input type="checkbox" class="form-check-input" id="useWhisper" checked>
+                                <label class="form-check-label" for="useWhisper">Use Whisper for precise alignment</label>
                             </div>
-                            
-                            <button type="submit" class="btn btn-primary w-100" id="processBtn">
-                                Process Alignment
-                            </button>
+                            <button type="submit" class="btn btn-success w-100" id="processBtn">Process Selected Characters</button>
                         </form>
                         
                         <div class="progress mt-3 d-none" id="progressBar">
@@ -49,6 +62,7 @@
             </div>
         </div>
         
+        <!-- Results Section -->
         <div class="row mt-4 d-none" id="resultsSection">
             <div class="col-12">
                 <div class="card">
@@ -58,7 +72,7 @@
                     <div class="card-body">
                         <div id="results"></div>
                         <div class="mt-3">
-                            <button class="btn btn-success" onclick="downloadAll()">Download All Segments</button>
+                            <button class="btn btn-success" id="downloadAllBtn" onclick="downloadAll()">Download All Tracks</button>
                         </div>
                     </div>
                 </div>
@@ -68,23 +82,109 @@
     
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+        let currentMetadata = null;
+
+        document.getElementById('metadataForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const file = document.getElementById('metadataFile').files[0];
+            const formData = new FormData();
+            formData.append('metadata', file);
+
+            try {
+                const response = await fetch('/upload_metadata', {
+                    method: 'POST',
+                    body: formData
+                });
+                const result = await response.json();
+                if (result.success) {
+                    currentMetadata = result;
+                    showStep2(result);
+                } else {
+                    alert('Error: ' + result.error);
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        });
+
+        function showStep2(data) {
+            document.getElementById('step1').classList.add('d-none');
+            document.getElementById('step2').classList.remove('d-none');
+            document.getElementById('metadataInfo').innerText = `File: ${data.filename} | Detected ${data.speakers.length} speakers.`;
+
+            const slotsDiv = document.getElementById('characterSlots');
+            slotsDiv.innerHTML = '<h6>Assign audio for each character:</h6>';
+
+            data.speakers.forEach((speaker, index) => {
+                const count = data.segments.filter(s => s.speaker === speaker).length;
+                const slot = `
+                    <div class="card mb-2 bg-light">
+                        <div class="card-body p-2">
+                            <div class="row align-items-center">
+                                <div class="col-md-1">
+                                    <input type="checkbox" class="form-check-input speaker-select" data-speaker="${speaker}" checked>
+                                </div>
+                                <div class="col-md-3">
+                                    <strong>${speaker}</strong> <br>
+                                    <small class="text-muted">${count} segments</small>
+                                </div>
+                                <div class="col-md-8">
+                                    <input type="file" class="form-control form-control-sm audio-input" data-speaker="${speaker}" accept="audio/*">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                slotsDiv.innerHTML += slot;
+            });
+        }
+
+        function resetProcess() {
+            document.getElementById('step1').classList.remove('d-none');
+            document.getElementById('step2').classList.add('d-none');
+            document.getElementById('resultsSection').classList.add('d-none');
+            document.getElementById('metadataForm').reset();
+            currentMetadata = null;
+        }
+
+        document.getElementById('processForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             
             const formData = new FormData();
-            formData.append('audio', document.getElementById('audioFile').files[0]);
-            formData.append('csv', document.getElementById('csvFile').files[0]);
+            formData.append('metadata_filename', currentMetadata.filename);
+            formData.append('use_whisper', document.getElementById('useWhisper').checked);
             
-            const timecodeFile = document.getElementById('timecodeFile').files[0];
-            if (timecodeFile) {
-                formData.append('timecode', timecodeFile);
+            const selects = document.querySelectorAll('.speaker-select:checked');
+            if (selects.length === 0) {
+                alert('Select at least one speaker to process.');
+                return;
             }
-            
+
+            let hasAudio = false;
+            selects.forEach(select => {
+                const speaker = select.getAttribute('data-speaker');
+                const input = document.querySelector(`.audio-input[data-speaker="${speaker}"]`);
+                if (input.files[0]) {
+                    formData.append(`audio_${speaker}`, input.files[0]);
+                    hasAudio = true;
+                }
+                formData.append('speakers', speaker);
+            });
+
+            if (!hasAudio) {
+                alert('Upload at least one audio file.');
+                return;
+            }
+
+            // Also send back the segments data
+            formData.append('segments', JSON.stringify(currentMetadata.segments));
+
             // Show progress
             document.getElementById('progressBar').classList.remove('d-none');
             document.getElementById('processBtn').disabled = true;
             
             try {
+                // We'll update /process to handle this new format
                 const response = await fetch('/process', {
                     method: 'POST',
                     body: formData
@@ -109,23 +209,21 @@
             const resultsDiv = document.getElementById('results');
             document.getElementById('resultsSection').classList.remove('d-none');
             
-            let html = '<h6>Segments Created:</h6>';
+            let html = '<h6>Aligned Character Tracks:</h6>';
             html += '<div class="list-group">';
             
-            data.output_files.segments.forEach(segment => {
+            data.output_files.forEach(track => {
                 html += `
                     <div class="list-group-item">
                         <div class="d-flex justify-content-between align-items-center">
                             <div>
-                                <strong>${segment.speaker}</strong> (${segment.start.toFixed(2)}s - ${segment.end.toFixed(2)}s)
+                                <strong>${track.speaker}</strong>
                                 <br>
-                                <small>EN: ${segment.text_en || 'N/A'}</small>
-                                <br>
-                                <small>RO: ${segment.text_ro || 'N/A'}</small>
+                                <small>${track.file}</small>
                             </div>
                             <div>
-                                <audio controls src="/preview/${segment.file}"></audio>
-                                <a href="/download/${segment.file}" class="btn btn-sm btn-primary">Download</a>
+                                <audio controls src="/preview/${track.file}"></audio>
+                                <a href="/download/${track.file}" class="btn btn-sm btn-primary">Download</a>
                             </div>
                         </div>
                     </div>
@@ -133,33 +231,12 @@
             });
             
             html += '</div>';
-            
-            if (data.output_files.details) {
-                html += '<h6 class="mt-4">Alignment Details:</h6>';
-                html += '<table class="table table-sm">';
-                html += '<thead><tr><th>Segment</th><th>Speaker</th><th>Original</th><th>Adjusted</th><th>VAD Confidence</th></tr></thead>';
-                html += '<tbody>';
-                
-                data.output_files.details.forEach(detail => {
-                    html += `
-                        <tr>
-                            <td>${detail.segment}</td>
-                            <td>${detail.speaker}</td>
-                            <td>${detail.original_start.toFixed(2)}s - ${detail.original_end.toFixed(2)}s</td>
-                            <td>${detail.adjusted_start.toFixed(2)}s - ${detail.adjusted_end.toFixed(2)}s</td>
-                            <td>${(detail.vad_confidence * 100).toFixed(1)}%</td>
-                        </tr>
-                    `;
-                });
-                
-                html += '</tbody></table>';
-            }
-            
             resultsDiv.innerHTML = html;
         }
         
         function downloadAll() {
-            window.location.href = '/download/concatenated_output.wav';
+            // In a real app, this might zip all results
+            alert('This would download a zip of all tracks.');
         }
     </script>
 </body>

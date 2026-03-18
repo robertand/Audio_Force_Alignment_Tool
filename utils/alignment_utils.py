@@ -163,3 +163,72 @@ class AlignmentUtils:
                 'duration': seg['end'] - seg['start']
             })
         return timeline
+
+    def parse_srt(self, file_path):
+        import re
+        segments = []
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+        except UnicodeDecodeError:
+            with open(file_path, 'r', encoding='latin-1') as f:
+                content = f.read()
+
+        # Regex to match SRT blocks
+        # Support both \n and \r\n
+        pattern = re.compile(r'(\d+)\s*\n(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})\s*\n(.*?)(?=\n\n|\n\r\n|\r\n\r\n|\n*$)', re.DOTALL)
+
+        def time_to_seconds(t_str):
+            h, m, s_ms = t_str.split(':')
+            s, ms = s_ms.split(',')
+            return int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000.0
+
+        for match in pattern.finditer(content):
+            start_str = match.group(2)
+            end_str = match.group(3)
+            text = match.group(4).strip()
+
+            # Simple speaker detection if text is "Speaker: text"
+            speaker = "Unknown"
+            if ':' in text[:30]:
+                parts = text.split(':', 1)
+                potential_speaker = parts[0].strip()
+                # If it looks like a name (not too many words)
+                if 0 < len(potential_speaker.split()) <= 2:
+                    speaker = potential_speaker
+                    text = parts[1].strip()
+
+            segments.append({
+                'start': time_to_seconds(start_str),
+                'end': time_to_seconds(end_str),
+                'speaker': speaker,
+                'text_ro': text,
+                'text_en': ""
+            })
+        return segments
+
+    def reconstruct_character_track(self, aligned_segments, sr):
+        """
+        Place aligned audio segments on a silent track at their target timecodes.
+        aligned_segments: list of (target_start, target_end, audio_segment)
+        """
+        if not aligned_segments:
+            return np.array([])
+
+        # Find required total duration
+        max_end = max(s[1] for s in aligned_segments)
+        full_track = np.zeros(int(max_end * sr))
+
+        for target_start, target_end, audio_seg in aligned_segments:
+            start_sample = int(target_start * sr)
+            end_sample = start_sample + len(audio_seg)
+
+            # Ensure we don't exceed track length
+            if end_sample > len(full_track):
+                end_sample = len(full_track)
+                audio_seg = audio_seg[:end_sample - start_sample]
+
+            # Place audio segment (or use a small crossfade/add to existing)
+            full_track[start_sample:end_sample] = audio_seg
+
+        return full_track
