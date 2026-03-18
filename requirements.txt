@@ -1,4 +1,6 @@
 flask==2.3.3
+# To enable CUDA for GPU acceleration:
+# pip install torch==2.0.1+cu118 torchaudio==2.0.2+cu118 --index-url https://download.pytorch.org/whl/cu118
 torch==2.0.1
 torchaudio==2.0.2
 numpy==1.24.3

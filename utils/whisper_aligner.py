@@ -31,7 +31,8 @@ class DialogueAligner:
                 word_timestamps=True,
                 no_speech_threshold=0.3,
                 logprob_threshold=-1.0,
-                condition_on_previous_text=False
+                condition_on_previous_text=False,
+                fp16=(self.device == "cuda")
             )
         except (RuntimeError, ValueError, TypeError) as e:
             # Catching more than just RuntimeError as Whisper/Torch errors can sometimes
@@ -47,7 +48,8 @@ class DialogueAligner:
                     word_timestamps=False,
                     no_speech_threshold=0.3,
                     logprob_threshold=-1.0,
-                    condition_on_previous_text=False
+                    condition_on_previous_text=False,
+                    fp16=(self.device == "cuda")
                 )
             else:
                 raise e
