@@ -60,6 +60,7 @@ def process_audio():
         
         # Read CSV
         df = pd.read_csv(csv_path)
+        df = df.fillna('')
         
         # Process alignment
         result = process_alignment(audio_path, df, timecode_data, temp_dir)
