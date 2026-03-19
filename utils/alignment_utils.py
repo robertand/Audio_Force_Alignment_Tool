@@ -207,17 +207,19 @@ class AlignmentUtils:
             })
         return segments
 
-    def reconstruct_character_track(self, aligned_segments, sr):
+    def reconstruct_character_track(self, aligned_segments, sr, total_duration=None):
         """
         Place aligned audio segments on a silent track at their target timecodes.
         aligned_segments: list of (target_start, target_end, audio_segment)
         """
-        if not aligned_segments:
+        if not aligned_segments and total_duration is None:
             return np.array([])
 
         # Find required total duration
-        max_end = max(s[1] for s in aligned_segments)
-        full_track = np.zeros(int(max_end * sr))
+        if total_duration is None:
+            total_duration = max(s[1] for s in aligned_segments) if aligned_segments else 0
+
+        full_track = np.zeros(int(total_duration * sr))
 
         for target_start, target_end, audio_seg in aligned_segments:
             start_sample = int(target_start * sr)
