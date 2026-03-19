@@ -51,14 +51,17 @@ def get_aligner(model_size="base", aligner_type="whisper"):
 
     return _aligner
 
-@app.errorhandler(500)
-def handle_500(e):
+@app.errorhandler(Exception)
+def handle_exception(e):
     error_details = traceback.format_exc()
+    status_code = 500
+    if hasattr(e, 'code'):
+        status_code = e.code
     return jsonify({
         'success': False,
         'error': str(e),
         'traceback': error_details
-    }), 500
+    }), status_code
 
 @app.route('/')
 def index():
@@ -76,6 +79,9 @@ def process_audio():
         
         if not segments or not speakers_to_process:
             return jsonify({'success': False, 'error': 'Missing metadata or speakers'}), 400
+
+        # Max duration for all tracks based on metadata
+        abs_max_end = max(s['end'] for s in segments) if segments else 0
 
         temp_dir = tempfile.mkdtemp(dir=app.config['UPLOAD_FOLDER'])
         
@@ -109,7 +115,7 @@ def process_audio():
                 aligned_for_reconstruction = []
 
                 if use_whisper and aligner:
-                    # Use Whisper to find where the dialogue actually is
+                    # Use Aligner to find where the dialogue actually is
                     alignments = aligner.align_character_audio(audio_path, char_segments)
 
                     for entry in alignments:
@@ -117,21 +123,33 @@ def process_audio():
                         aligned = entry['aligned']
 
                         if aligned:
-                            # Extract the segment from the character's audio based on Whisper's timing
+                            # Extract the segment from the character's audio based on Aligner's timing
                             extracted = audio_processor.extract_segment(
                                 char_audio, sr, aligned['start'], aligned['end'], orig.get('text_ro', '')
                             )
                             aligned_for_reconstruction.append((orig['start'], orig['end'], extracted))
                         else:
-                            # Fallback or skip
+                            # Fallback: exact duration copy from input audio if alignment failed completely
+                            # (Though MMS aligner now has its own fallback)
                             pass
                 else:
-                    # Simple alignment
-                    pass
+                    # No Aligner: Simple sequential copy based on metadata durations
+                    current_ptr = 0.0
+                    total_dur = len(char_audio) / sr
+                    for orig in char_segments:
+                        dur = orig['end'] - orig['start']
+                        start = min(current_ptr, total_dur)
+                        end = min(current_ptr + dur, total_dur)
+
+                        extracted = char_audio[int(start*sr):int(end*sr)]
+                        aligned_for_reconstruction.append((orig['start'], orig['end'], extracted))
+                        current_ptr = end
 
                 if aligned_for_reconstruction:
                     # Build the full track for this character
-                    full_track = alignment_utils.reconstruct_character_track(aligned_for_reconstruction, sr, min_gap=min_gap)
+                    full_track = alignment_utils.reconstruct_character_track(
+                        aligned_for_reconstruction, sr, max_duration=abs_max_end
+                    )
 
                     output_filename = f"track_{secure_filename(speaker)}.wav"
                     output_path = os.path.join(app.config['OUTPUT_FOLDER'], output_filename)

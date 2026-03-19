@@ -13,56 +13,35 @@ class MMSDialogueAligner:
 
     def align_character_audio(self, audio_path, expected_segments, language="ron"):
         """
-        Align audio with expected segments using MMS model
+        Align audio with expected segments using MMS model.
+        When Aligner is disabled (or as fallback), it returns segments based exactly on original durations.
         """
         # Load audio
         audio, sr = librosa.load(audio_path, sr=self.target_sr)
-
-        # Romanian ISO-639-3 code is 'ron' (which is the default for Romanian in MMS usually)
-        # The processor and model are already loaded.
-        # In a real implementation of forced alignment with Wav2Vec2CTC, we'd use
-        # the trellis/CTCSegmentation algorithm.
+        total_audio_duration = len(audio) / self.target_sr
 
         # 1. Get Logits
         inputs = self.processor(audio, sampling_rate=self.target_sr, return_tensors="pt").to(self.device)
         with torch.no_grad():
             logits = self.model(**inputs).logits[0]
 
-        # 2. Basic greedy decoding as a simplified "transcription" for matching
-        # (For true forced alignment we'd need more complex logic, but we follow the user's
-        # request to try this model)
+        # 2. Map predicted tokens to roughly their time in the file
         predicted_ids = torch.argmax(logits, dim=-1)
-        transcription = self.processor.batch_decode(predicted_ids.unsqueeze(0))[0]
-
-        # We need timestamps. Simple linear mapping of logits to time as a first pass.
-        # total_duration = len(audio) / self.target_sr
-        # num_frames = logits.shape[0]
-        # frame_duration = total_duration / num_frames
-
-        # However, for forced alignment, we should ideally use CTC segmentation.
-        # But to keep it consistent with our current architecture:
-        # we'll return the greedy transcription with rough timestamps and use our sequential matcher.
-
-        # Map predicted tokens to roughly their time in the file
         tokens = self.processor.tokenizer.convert_ids_to_tokens(predicted_ids.tolist())
         transcribed_segments = []
 
-        # Group tokens into words/sentences with rough timestamps
         current_text = ""
         start_time = 0.0
-
         num_frames = logits.shape[0]
-        total_duration = len(audio) / self.target_sr
 
-        # Basic heuristic: non-blank tokens are speech
         for i, token in enumerate(tokens):
             if token != self.processor.tokenizer.pad_token:
                 if not current_text:
-                    start_time = (i / num_frames) * total_duration
+                    start_time = (i / num_frames) * total_audio_duration
                 current_text += token.replace("|", " ")
 
             if (token == "|" or i == len(tokens) - 1) and current_text:
-                end_time = (i / num_frames) * total_duration
+                end_time = (i / num_frames) * total_audio_duration
                 transcribed_segments.append({
                     'start': start_time,
                     'end': end_time,
@@ -70,13 +49,30 @@ class MMSDialogueAligner:
                 })
                 current_text = ""
 
-        # 3. Match using the same sequential logic as Whisper for consistency
+        # 3. Match using sequential logic
         aligned_results = []
         last_match_idx = -1
 
+        # Track where we are in the input audio for duration-based fallback
+        current_audio_pointer = 0.0
+
         for expected in expected_segments:
             expected_text = expected.get('text_ro', '').strip()
+            # Duration based on metadata
+            expected_duration = expected['end'] - expected['start']
+
             if not expected_text:
+                # Still try to map if there's no text (e.g. music/sound)
+                aligned_results.append({
+                    'original': expected,
+                    'aligned': {
+                        'start': min(current_audio_pointer, total_audio_duration),
+                        'end': min(current_audio_pointer + expected_duration, total_audio_duration),
+                        'text': "",
+                        'confidence': 1.0
+                    }
+                })
+                current_audio_pointer += expected_duration
                 continue
 
             best_match = None
@@ -84,6 +80,7 @@ class MMSDialogueAligner:
             highest_ratio = 0.0
 
             search_start = last_match_idx + 1
+            # Search window
             search_end = min(len(transcribed_segments), search_start + 15)
 
             for i in range(search_start, search_end):
@@ -96,13 +93,7 @@ class MMSDialogueAligner:
                     best_match = transcribed
                     best_match_idx = i
 
-            # Aggressive matching with fallback
-            if highest_ratio < 0.3 and search_start < len(transcribed_segments):
-                best_match = transcribed_segments[search_start]
-                best_match_idx = search_start
-                highest_ratio = 0.1
-
-            if best_match:
+            if highest_ratio >= 0.3 and best_match:
                 aligned_results.append({
                     'original': expected,
                     'aligned': {
@@ -113,10 +104,22 @@ class MMSDialogueAligner:
                     }
                 })
                 last_match_idx = best_match_idx
+                current_audio_pointer = best_match['end']
             else:
+                # Fallback: take next chunk from input audio based on metadata duration
+                # This ensures tracks are "copied as they are" if aligner fails
+                start = min(current_audio_pointer, total_audio_duration)
+                end = min(current_audio_pointer + expected_duration, total_audio_duration)
+
                 aligned_results.append({
                     'original': expected,
-                    'aligned': None
+                    'aligned': {
+                        'start': start,
+                        'end': end,
+                        'text': "[Fallback Duration]",
+                        'confidence': 0.0
+                    }
                 })
+                current_audio_pointer = end
 
         return aligned_results

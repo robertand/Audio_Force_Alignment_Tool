@@ -119,7 +119,15 @@
                     method: 'POST',
                     body: formData
                 });
-                const result = await response.json();
+                const text = await response.text();
+                let result;
+                try {
+                    result = JSON.parse(text);
+                } catch (e) {
+                    console.error("Failed to parse JSON:", text);
+                    alert("The server returned an invalid response (not JSON).");
+                    return;
+                }
                 if (result.success) {
                     currentMetadata = result;
                     showStep2(result);
@@ -128,6 +136,7 @@
                 }
             } catch (error) {
                 alert('Error: ' + error.message);
+                console.error(error);
             }
         });
 
@@ -197,7 +206,7 @@
 
         document.getElementById('processForm').addEventListener('submit', async (e) => {
             e.preventDefault();
-            
+
             const formData = new FormData();
             formData.append('metadata_filename', currentMetadata.filename);
             formData.append('use_whisper', document.getElementById('useWhisper').checked);
@@ -235,21 +244,30 @@
             document.getElementById('processBtn').disabled = true;
             
             try {
-                // We'll update /process to handle this new format
                 const response = await fetch('/process', {
                     method: 'POST',
                     body: formData
                 });
                 
-                const result = await response.json();
+                const text = await response.text();
+                let result;
+                try {
+                    result = JSON.parse(text);
+                } catch (e) {
+                    console.error("Failed to parse JSON:", text);
+                    alert("The server returned an invalid response (not JSON). Check the console for more details.");
+                    return;
+                }
                 
                 if (result.success) {
                     displayResults(result);
                 } else {
-                    alert('Error: ' + result.error);
+                    alert('Error: ' + (result.error || 'Unknown error occurred.'));
+                    if (result.traceback) console.error(result.traceback);
                 }
             } catch (error) {
                 alert('Error processing files: ' + error.message);
+                console.error(error);
             } finally {
                 document.getElementById('progressBar').classList.add('d-none');
                 document.getElementById('processBtn').disabled = false;

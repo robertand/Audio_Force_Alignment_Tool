@@ -11,4 +11,5 @@ webrtcvad==2.0.10
 pandas==2.0.3
 scipy==1.10.1
 matplotlib==3.7.2
-whisper-timestamped==1.14.2
+openai-whisper==20231117
+transformers==4.35.2
