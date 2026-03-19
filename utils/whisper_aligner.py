@@ -69,33 +69,51 @@ class DialogueAligner:
 
             # 1. Try fuzzy matching in a window
             search_start = last_match_idx + 1
-            search_end = min(len(transcribed_segments), search_start + 15)
+            # Search the entire remaining transcript for the best text match (Global Monotonic Search)
+            search_end = len(transcribed_segments)
 
             # Text normalization for better matching
             norm_expected = normalize_text(expected_text)
             strip_expected = strip_diacritics(norm_expected)
 
-            for i in range(search_start, search_end):
+            # 1. Search for best text match in a local window first (Segmented search)
+            # This prevents jumping too far ahead if multiple lines are similar
+            search_window = 10
+            local_search_end = min(search_start + search_window, len(transcribed_segments))
+
+            for i in range(search_start, local_search_end):
                 transcribed = transcribed_segments[i]
-                trans_text = transcribed['text'].strip()
-                norm_trans = normalize_text(trans_text)
+                norm_trans = normalize_text(transcribed['text'])
 
-                # Try three levels of matching
-                # 1. Normalized comparison
                 ratio = difflib.SequenceMatcher(None, norm_expected, norm_trans).ratio()
-
-                # 2. Even more aggressive diacritic-stripped comparison
                 strip_ratio = difflib.SequenceMatcher(None, strip_expected, strip_diacritics(norm_trans)).ratio()
-
-                combined_ratio = max(ratio, strip_ratio * 0.9) # Slightly penalize diacritic-stripped matching
+                combined_ratio = max(ratio, strip_ratio * 0.9)
 
                 if combined_ratio > highest_ratio:
                     highest_ratio = combined_ratio
                     best_match = transcribed
                     best_match_idx = i
 
-            # Sequential fallback for consistency
-            if highest_ratio < 0.35 and search_start < len(transcribed_segments):
+                if combined_ratio > 0.85: break
+
+            # 2. If no local match, try a wider search but with a penalty for distance
+            if highest_ratio < 0.5:
+                for i in range(local_search_end, len(transcribed_segments)):
+                    transcribed = transcribed_segments[i]
+                    norm_trans = normalize_text(transcribed['text'])
+                    ratio = difflib.SequenceMatcher(None, norm_expected, norm_trans).ratio()
+                    distance_penalty = 1.0 - (0.01 * (i - search_start)) # Penalize 1% per segment distance
+                    combined_ratio = ratio * max(0.5, distance_penalty)
+
+                    if combined_ratio > highest_ratio:
+                        highest_ratio = combined_ratio
+                        best_match = transcribed
+                        best_match_idx = i
+                    if combined_ratio > 0.85: break
+
+            # 3. Direct Copy Fallback: "copiaza pistele asa cum sunt"
+            # If we still don't have a good match, just take the next segment
+            if highest_ratio < 0.3 and search_start < len(transcribed_segments):
                 best_match = transcribed_segments[search_start]
                 best_match_idx = search_start
                 highest_ratio = 0.1

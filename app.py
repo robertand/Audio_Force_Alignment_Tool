@@ -73,7 +73,7 @@ def handle_exception(e):
 def index():
     return render_template('index.html')
 
-def run_job(job_id, segments, speakers_to_process, files_dict, use_whisper, model_size, aligner_type):
+def run_job(job_id, segments, speakers_to_process, files_dict, use_whisper, model_size, aligner_type, min_gap):
     temp_dir = None
     try:
         jobs[job_id]['status'] = 'processing'
@@ -129,7 +129,9 @@ def run_job(job_id, segments, speakers_to_process, files_dict, use_whisper, mode
 
                 if aligned_for_reconstruction:
                     full_track = alignment_utils.reconstruct_character_track(
-                        aligned_for_reconstruction, sr, max_duration=abs_max_end
+                        aligned_for_reconstruction, sr, max_duration=abs_max_end,
+                        push_overlapping=True, # This handles the 'push' logic
+                        min_gap=min_gap
                     )
                     # Use a stable filename for the character track so it persists even if processing is repeated
                     output_filename = f"track_{secure_filename(speaker)}.wav"
@@ -173,6 +175,8 @@ def process_audio():
             if audio_file:
                 files_dict[speaker] = audio_file.read()
 
+        min_gap = float(request.form.get('min_gap', 0))
+
         job_id = str(uuid.uuid4())
         jobs[job_id] = {
             'id': job_id,
@@ -182,7 +186,7 @@ def process_audio():
         }
 
         thread = threading.Thread(target=run_job, args=(
-            job_id, segments, speakers_to_process, files_dict, use_whisper, model_size, aligner_type
+            job_id, segments, speakers_to_process, files_dict, use_whisper, model_size, aligner_type, min_gap
         ))
         thread.start()
 

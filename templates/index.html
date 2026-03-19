@@ -211,6 +211,7 @@
             formData.append('use_whisper', document.getElementById('useWhisper').checked);
             formData.append('aligner_type', document.getElementById('alignerType').value);
             formData.append('model_size', document.getElementById('modelSize').value);
+            formData.append('min_gap', document.getElementById('minGap').value || 0);
 
             const selects = document.querySelectorAll('.speaker-select:checked');
             if (selects.length === 0) {
@@ -261,11 +262,14 @@
             }
         });
 
+        let pollCount = 0;
         async function pollStatus(jobId) {
             const progressBar = document.querySelector('#progressBar .progress-bar');
+            pollCount++;
 
             try {
                 const response = await fetch(`/job/status/${jobId}`);
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                 const job = await response.json();
 
                 if (job.status === 'processing' || job.status === 'queued') {
@@ -291,7 +295,9 @@
                 }
             } catch (error) {
                 console.error("Polling error:", error);
-                setTimeout(() => pollStatus(jobId), 3000);
+                // Exponential backoff or max retries to avoid infinite loops if server is down
+                const delay = Math.min(10000, 3000 + (pollCount * 100));
+                setTimeout(() => pollStatus(jobId), delay);
             }
         }
         

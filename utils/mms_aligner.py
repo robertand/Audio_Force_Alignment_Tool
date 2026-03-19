@@ -14,95 +14,86 @@ class MMSDialogueAligner:
 
     def align_character_audio(self, audio_path, expected_segments, language="ron"):
         """
-        Align audio with expected segments using MMS model.
-        When Aligner is disabled (or as fallback), it returns segments based exactly on original durations.
+        Align audio with expected segments using MMS model with Segmented Local Alignment.
         """
         # Load audio
         audio, sr = librosa.load(audio_path, sr=self.target_sr)
         total_audio_duration = len(audio) / self.target_sr
 
-        # 1. Get Logits
-        inputs = self.processor(audio, sampling_rate=self.target_sr, return_tensors="pt").to(self.device)
-        with torch.no_grad():
-            logits = self.model(**inputs).logits[0]
-
-        # 2. Map predicted tokens to roughly their time in the file
-        predicted_ids = torch.argmax(logits, dim=-1)
-        tokens = self.processor.tokenizer.convert_ids_to_tokens(predicted_ids.tolist())
-        transcribed_segments = []
-
-        current_text = ""
-        start_time = 0.0
-        num_frames = logits.shape[0]
-
-        for i, token in enumerate(tokens):
-            if token != self.processor.tokenizer.pad_token:
-                if not current_text:
-                    start_time = (i / num_frames) * total_audio_duration
-                current_text += token.replace("|", " ")
-
-            if (token == "|" or i == len(tokens) - 1) and current_text:
-                end_time = (i / num_frames) * total_audio_duration
-                transcribed_segments.append({
-                    'start': start_time,
-                    'end': end_time,
-                    'text': current_text.strip()
-                })
-                current_text = ""
-
-        # 3. Match using sequential logic
         aligned_results = []
-        last_match_idx = -1
+        current_audio_ptr = 0.0 # Time in seconds in the input audio file
 
-        # Track where we are in the input audio for duration-based fallback
-        current_audio_pointer = 0.0
+        # INCREASE SEARCH WINDOW to be more robust (from 40s to 120s)
+        SEARCH_WINDOW_SEC = 120.0
 
         for expected in expected_segments:
             expected_text = expected.get('text_ro', '').strip()
-            # Duration based on metadata
             expected_duration = expected['end'] - expected['start']
 
             if not expected_text:
-                # Still try to map if there's no text (e.g. music/sound)
+                start = min(current_audio_ptr, total_audio_duration)
+                end = min(current_audio_ptr + expected_duration, total_audio_duration)
                 aligned_results.append({
                     'original': expected,
-                    'aligned': {
-                        'start': min(current_audio_pointer, total_audio_duration),
-                        'end': min(current_audio_pointer + expected_duration, total_audio_duration),
-                        'text': "",
-                        'confidence': 1.0
-                    }
+                    'aligned': {'start': start, 'end': end, 'text': "", 'confidence': 1.0}
                 })
-                current_audio_pointer += expected_duration
+                current_audio_ptr = end
                 continue
 
+            # 1. Search locally in the chunk
+            search_start_time = max(0.0, current_audio_ptr - 5.0) # 5s overlap for safety
+            search_end_time = min(total_audio_duration, search_start_time + SEARCH_WINDOW_SEC)
+
+            start_sample = int(search_start_time * self.target_sr)
+            end_sample = int(search_end_time * self.target_sr)
+            chunk = audio[start_sample:end_sample]
+
             best_match = None
-            best_match_idx = -1
             highest_ratio = 0.0
 
-            search_start = last_match_idx + 1
-            # Search window
-            search_end = min(len(transcribed_segments), search_start + 15)
+            if len(chunk) >= 1000:
+                inputs = self.processor(chunk, sampling_rate=self.target_sr, return_tensors="pt").to(self.device)
+                with torch.no_grad():
+                    logits = self.model(**inputs).logits[0]
 
-            norm_expected = normalize_text(expected_text)
-            strip_expected = strip_diacritics(norm_expected)
+                predicted_ids = torch.argmax(logits, dim=-1)
+                tokens = self.processor.tokenizer.convert_ids_to_tokens(predicted_ids.tolist())
 
-            for i in range(search_start, search_end):
-                transcribed = transcribed_segments[i]
-                trans_text = transcribed['text'].strip()
-                norm_trans = normalize_text(trans_text)
+                local_segments = []
+                curr_text = ""
+                curr_start = 0.0
+                num_frames = logits.shape[0]
+                chunk_duration = len(chunk) / self.target_sr
 
-                ratio = difflib.SequenceMatcher(None, norm_expected, norm_trans).ratio()
-                strip_ratio = difflib.SequenceMatcher(None, strip_expected, strip_diacritics(norm_trans)).ratio()
+                for i, token in enumerate(tokens):
+                    if token != self.processor.tokenizer.pad_token:
+                        if not curr_text:
+                            curr_start = (i / num_frames) * chunk_duration
+                        curr_text += token.replace("|", " ")
+                    if (token == "|" or i == len(tokens) - 1) and curr_text:
+                        curr_end = (i / num_frames) * chunk_duration
+                        local_segments.append({
+                            'start': search_start_time + curr_start,
+                            'end': search_start_time + curr_end,
+                            'text': curr_text.strip()
+                        })
+                        curr_text = ""
 
-                combined_ratio = max(ratio, strip_ratio * 0.9)
+                norm_expected = normalize_text(expected_text)
+                strip_expected = strip_diacritics(norm_expected)
 
-                if combined_ratio > highest_ratio:
-                    highest_ratio = combined_ratio
-                    best_match = transcribed
-                    best_match_idx = i
+                for seg in local_segments:
+                    norm_trans = normalize_text(seg['text'])
+                    ratio = difflib.SequenceMatcher(None, norm_expected, norm_trans).ratio()
+                    strip_ratio = difflib.SequenceMatcher(None, strip_expected, strip_diacritics(norm_trans)).ratio()
+                    combined_ratio = max(ratio, strip_ratio * 0.9)
 
-            if highest_ratio >= 0.3 and best_match:
+                    if combined_ratio > highest_ratio:
+                        highest_ratio = combined_ratio
+                        best_match = seg
+
+            # 2. Results and fallback logic
+            if highest_ratio >= 0.35 and best_match:
                 aligned_results.append({
                     'original': expected,
                     'aligned': {
@@ -112,23 +103,16 @@ class MMSDialogueAligner:
                         'confidence': highest_ratio
                     }
                 })
-                last_match_idx = best_match_idx
-                current_audio_pointer = best_match['end']
+                current_audio_ptr = best_match['end']
             else:
-                # Fallback: take next chunk from input audio based on metadata duration
-                # This ensures tracks are "copied as they are" if aligner fails
-                start = min(current_audio_pointer, total_audio_duration)
-                end = min(current_audio_pointer + expected_duration, total_audio_duration)
-
+                # Fallback: Just COPY EXACT DURATION FROM THE CURRENT POSITION
+                # (User request: "copiaza pistele asa cum sunt" when failing)
+                start = min(current_audio_ptr, total_audio_duration)
+                end = min(current_audio_ptr + expected_duration, total_audio_duration)
                 aligned_results.append({
                     'original': expected,
-                    'aligned': {
-                        'start': start,
-                        'end': end,
-                        'text': "[Fallback Duration]",
-                        'confidence': 0.0
-                    }
+                    'aligned': {'start': start, 'end': end, 'text': "[Direct Copy Fallback]", 'confidence': 0.0}
                 })
-                current_audio_pointer = end
+                current_audio_ptr = end
 
         return aligned_results
