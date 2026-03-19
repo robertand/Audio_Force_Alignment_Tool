@@ -5,6 +5,9 @@ import pandas as pd
 import numpy as np
 import tempfile
 import shutil
+import threading
+import uuid
+import time
 from werkzeug.utils import secure_filename
 import torch
 import torchaudio
@@ -28,15 +31,140 @@ audio_processor = AudioProcessor()
 vad_processor = VADProcessor()
 alignment_utils = AlignmentUtils()
 
+# Job management
+JOBS = {}
+jobs_lock = threading.Lock()
+
+def cleanup_old_jobs():
+    """Periodically remove jobs older than 1 hour and their associated files"""
+    while True:
+        try:
+            time.sleep(600) # Run every 10 minutes
+            now = time.time()
+            to_delete = []
+            with jobs_lock:
+                for job_id, job in JOBS.items():
+                    # If job was created more than 1 hour ago
+                    if now - job.get('created_at', 0) > 3600:
+                        to_delete.append(job_id)
+
+            for job_id in to_delete:
+                with jobs_lock:
+                    job = JOBS.pop(job_id, None)
+                    if job:
+                        # Delete audio files
+                        audio_info = job.get('audio_files_info', {})
+                        for speaker, info in audio_info.items():
+                            path = info.get('path')
+                            if path and os.path.exists(path):
+                                try:
+                                    os.remove(path)
+                                except:
+                                    pass
+        except Exception as e:
+            print(f"Cleanup error: {e}")
+
+# Start cleanup thread
+cleanup_thread = threading.Thread(target=cleanup_old_jobs, daemon=True)
+cleanup_thread.start()
+
 # Lazy-loaded aligner
 _aligner = None
+aligner_lock = threading.Lock()
 
 def get_aligner():
     global _aligner
-    if _aligner is None:
-        from utils.whisper_aligner import DialogueAligner
-        _aligner = DialogueAligner()
-    return _aligner
+    with aligner_lock:
+        if _aligner is None:
+            from utils.whisper_aligner import DialogueAligner
+            _aligner = DialogueAligner()
+        return _aligner
+
+def background_alignment(job_id, segments, speakers_to_process, audio_files_info, use_whisper, model_name, initial_prompt):
+    try:
+        aligner = get_aligner() if use_whisper else None
+
+        all_alignments = []
+        total_steps = len(speakers_to_process)
+
+        for idx, speaker in enumerate(speakers_to_process):
+            with jobs_lock:
+                if job_id in JOBS:
+                    JOBS[job_id]['progress'] = int((idx / total_steps) * 100)
+                    JOBS[job_id]['status'] = f'Aligning speaker: {speaker}'
+
+            audio_info = audio_files_info.get(speaker)
+            if not audio_info:
+                continue
+
+            audio_path = audio_info['path']
+
+            # Filter segments for this character
+            char_segments = [s for s in segments if s['speaker'] == speaker]
+
+            if use_whisper and aligner:
+                # Use Whisper to find where the dialogue actually is
+                # Protect model transcription with lock to avoid race conditions on the same model instance
+                with aligner_lock:
+                    alignments = aligner.align_character_audio(
+                        audio_path, char_segments,
+                        model_name=model_name,
+                        initial_prompt=initial_prompt
+                    )
+
+                for entry in alignments:
+                    orig = entry['original']
+                    aligned = entry['aligned']
+
+                    alignment_info = {
+                        'speaker': speaker,
+                        'text_ro': orig.get('text_ro', ''),
+                        'csv_start': orig['start'],
+                        'csv_end': orig['end'],
+                        'original_audio_filename': audio_info['filename']
+                    }
+
+                    if aligned:
+                        alignment_info.update({
+                            'source_start': aligned['start'],
+                            'source_end': aligned['end'],
+                            'confidence': aligned['confidence']
+                        })
+                    else:
+                        alignment_info.update({
+                            'source_start': 0,
+                            'source_end': orig['end'] - orig['start'],
+                            'confidence': 0
+                        })
+                    all_alignments.append(alignment_info)
+            else:
+                # No whisper, just mapping CSV timing to audio source starting at 0
+                for orig in char_segments:
+                    all_alignments.append({
+                        'speaker': speaker,
+                        'text_ro': orig.get('text_ro', ''),
+                        'csv_start': orig['start'],
+                        'csv_end': orig['end'],
+                        'original_audio_filename': audio_info['filename'],
+                        'source_start': 0,
+                        'source_end': orig['end'] - orig['start'],
+                        'confidence': 1.0
+                    })
+
+        with jobs_lock:
+            if job_id in JOBS:
+                JOBS[job_id]['progress'] = 100
+                JOBS[job_id]['status'] = 'Completed'
+                JOBS[job_id]['results'] = all_alignments
+                JOBS[job_id]['success'] = True
+
+    except Exception as e:
+        traceback.print_exc()
+        with jobs_lock:
+            if job_id in JOBS:
+                JOBS[job_id]['status'] = 'Failed'
+                JOBS[job_id]['error'] = str(e)
+                JOBS[job_id]['success'] = False
 
 @app.route('/')
 def index():
@@ -44,73 +172,133 @@ def index():
 
 @app.route('/process', methods=['POST'])
 def process_audio():
-    temp_dir = None
     try:
         # Get metadata and settings
         segments = json.loads(request.form.get('segments', '[]'))
         use_whisper = request.form.get('use_whisper') == 'true'
         speakers_to_process = request.form.getlist('speakers')
+        model_name = request.form.get('whisper_model', 'base')
+        initial_prompt = request.form.get('initial_prompt', '')
         
         if not segments or not speakers_to_process:
             return jsonify({'success': False, 'error': 'Missing metadata or speakers'}), 400
 
-        temp_dir = tempfile.mkdtemp(dir=app.config['UPLOAD_FOLDER'])
+        job_id = str(uuid.uuid4())
         
-        output_tracks = []
-        
-        # Optional Whisper Aligner
-        aligner = None
-        if use_whisper:
-            aligner = get_aligner()
-
+        # Save audio files temporarily
+        audio_files_info = {}
         for speaker in speakers_to_process:
             audio_key = f'audio_{speaker}'
             audio_file = request.files.get(audio_key)
+            if audio_file:
+                perm_filename = f"{job_id}_{secure_filename(speaker)}.wav"
+                perm_path = os.path.join(app.config['UPLOAD_FOLDER'], perm_filename)
+                audio_file.save(perm_path)
+                audio_files_info[speaker] = {
+                    'path': perm_path,
+                    'filename': audio_file.filename
+                }
 
-            if not audio_file:
-                continue # Skip if no audio provided for this selected speaker
+        # Find total duration from ALL segments in metadata
+        total_duration = 0
+        if segments:
+            total_duration = max(s['end'] for s in segments)
 
-            audio_path = os.path.join(temp_dir, f"input_{secure_filename(speaker)}.wav")
-            audio_file.save(audio_path)
+        with jobs_lock:
+            JOBS[job_id] = {
+                'progress': 0,
+                'status': 'Starting...',
+                'results': None,
+                'success': None,
+                'audio_files_info': audio_files_info, # Store for authorized lookup in /generate_final
+                'total_duration': total_duration,
+                'created_at': time.time()
+            }
 
-            # Load input audio
-            char_audio, sr = audio_processor.load_audio(audio_path)
+        # Start thread
+        thread = threading.Thread(
+            target=background_alignment,
+            args=(job_id, segments, speakers_to_process, audio_files_info, use_whisper, model_name, initial_prompt)
+        )
+        thread.daemon = True
+        thread.start()
 
-            # Filter segments for this character
-            char_segments = [s for s in segments if s['speaker'] == speaker]
+        return jsonify({
+            'success': True,
+            'job_id': job_id
+        })
 
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/generate_final', methods=['POST'])
+def generate_final():
+    try:
+        data = request.json
+        job_id = data.get('job_id')
+        adjusted_data = data.get('alignments', [])
+
+        if not job_id or not adjusted_data:
+            return jsonify({'success': False, 'error': 'Missing job_id or alignments'}), 400
+
+        with jobs_lock:
+            job = JOBS.get(job_id)
+            if not job:
+                return jsonify({'success': False, 'error': 'Job not found'}), 404
+            audio_files_info = job['audio_files_info']
+            total_duration = job['total_duration']
+
+        # Group by speaker
+        speakers_segments = {}
+        for seg in adjusted_data:
+            speaker = seg['speaker']
+            if speaker not in speakers_segments:
+                speakers_segments[speaker] = []
+            speakers_segments[speaker].append(seg)
+
+        output_tracks = []
+        source_audio_cache = {}
+
+        for speaker, speaker_segs in speakers_segments.items():
             aligned_for_reconstruction = []
+            sr = 16000
 
-            if use_whisper and aligner:
-                # Use Whisper to find where the dialogue actually is
-                alignments = aligner.align_character_audio(audio_path, char_segments)
+            for seg in speaker_segs:
+                # Security: Look up path from server-side state using speaker name
+                # Do NOT trust path from client
+                speaker_info = audio_files_info.get(speaker)
+                if not speaker_info:
+                    continue
 
-                for entry in alignments:
-                    orig = entry['original']
-                    aligned = entry['aligned']
+                audio_path = speaker_info['path']
+                if audio_path not in source_audio_cache:
+                    source_audio_cache[audio_path] = audio_processor.load_audio(audio_path)
 
-                    if aligned:
-                        # Extract the segment from the character's audio based on Whisper's timing
-                        extracted = audio_processor.extract_segment(
-                            char_audio, sr, aligned['start'], aligned['end'], orig.get('text_ro', '')
-                        )
-                        aligned_for_reconstruction.append((orig['start'], orig['end'], extracted))
-                    else:
-                        # Fallback or skip
-                        pass
-            else:
-                # Simple alignment: assume the character audio file matches the timeline
-                # (this might not be what the user wants if they upload JUST the dialogue)
-                # But the user said: "sa incarce audio doar dialogul acelui personaj"
-                # If they upload just dialogue, we might need more complex matching
-                # even without whisper, but whisper is the requested way.
-                pass
+                audio, sr = source_audio_cache[audio_path]
+
+                extracted = audio_processor.extract_segment(
+                    audio, sr,
+                    float(seg['source_start']),
+                    float(seg['source_end']),
+                    seg.get('text_ro', '')
+                )
+
+                aligned_for_reconstruction.append((
+                    float(seg['csv_start']),
+                    float(seg['csv_end']),
+                    extracted
+                ))
 
             if aligned_for_reconstruction:
-                # Build the full track for this character
-                full_track = alignment_utils.reconstruct_character_track(aligned_for_reconstruction, sr)
+                full_track = alignment_utils.reconstruct_character_track(
+                    aligned_for_reconstruction, sr, total_duration=total_duration
+                )
 
-                output_filename = f"track_{secure_filename(speaker)}.wav"
+                output_filename = f"track_{job_id}_{secure_filename(speaker)}.wav"
                 output_path = os.path.join(app.config['OUTPUT_FOLDER'], output_filename)
                 sf.write(output_path, full_track, sr)
 
@@ -121,113 +309,21 @@ def process_audio():
 
         return jsonify({
             'success': True,
-            'message': 'Alignment completed successfully',
+            'message': 'Tracks generated successfully',
             'output_files': output_tracks
         })
-        
+
     except Exception as e:
         traceback.print_exc()
         return jsonify({
             'success': False,
             'error': str(e)
         }), 500
-    finally:
-        # Cleanup temp files after sending response
-        if temp_dir and os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir, ignore_errors=True)
-
-def process_alignment(audio_path, df, timecode_data, temp_dir):
-    """Main alignment processing function"""
-    
-    # Load audio
-    audio, sr = audio_processor.load_audio(audio_path)
-    
-    # Process VAD to detect speech segments
-    vad_segments = vad_processor.process_vad(audio, sr)
-    
-    # Get expected segments from CSV
-    expected_segments = []
-    for idx, row in df.iterrows():
-        expected_segments.append({
-            'start': row['start'],
-            'end': row['end'],
-            'speaker': row['speaker'],
-            'text_en': row['en'],
-            'text_ro': row['ro']
-        })
-    
-    # Validate and adjust segments using VAD
-    validated_segments = alignment_utils.validate_segments(
-        expected_segments, vad_segments, sr
-    )
-    
-    # Cut audio according to validated segments
-    output_files = []
-    details = []
-    
-    for i, segment in enumerate(validated_segments):
-        # Extract segment audio
-        start_sample = int(segment['start'] * sr)
-        end_sample = int(segment['end'] * sr)
-        segment_audio = audio[start_sample:end_sample]
-        
-        # Apply crossfade at boundaries to avoid clicks
-        if i > 0:
-            prev_end = validated_segments[i-1]['end']
-            if segment['start'] - prev_end < 0.1:  # If segments are very close
-                segment_audio = alignment_utils.apply_crossfade(
-                    segment_audio, sr, 0.01
-                )
-        
-        # Save segment
-        output_filename = f"segment_{i:04d}_{segment['speaker']}.wav"
-        output_path = os.path.join(temp_dir, output_filename)
-        sf.write(output_path, segment_audio, sr)
-        
-        # Move to output folder
-        final_output = os.path.join(app.config['OUTPUT_FOLDER'], output_filename)
-        shutil.move(output_path, final_output)
-        output_files.append({
-            'file': output_filename,
-            'path': final_output,
-            'start': segment['start'],
-            'end': segment['end'],
-            'speaker': segment['speaker'],
-            'text_en': segment['text_en'],
-            'text_ro': segment['text_ro']
-        })
-        
-        details.append({
-            'segment': i,
-            'speaker': segment['speaker'],
-            'original_start': segment['original_start'],
-            'original_end': segment['original_end'],
-            'adjusted_start': segment['start'],
-            'adjusted_end': segment['end'],
-            'duration': segment['end'] - segment['start'],
-            'vad_confidence': segment.get('vad_confidence', 1.0)
-        })
-    
-    # Create concatenated audio if needed
-    if len(output_files) > 1:
-        concat_audio = alignment_utils.concatenate_segments(
-            [f['path'] for f in output_files]
-        )
-        concat_path = os.path.join(app.config['OUTPUT_FOLDER'], 'concatenated_output.wav')
-        sf.write(concat_path, concat_audio, sr)
-        output_files.append({
-            'file': 'concatenated_output.wav',
-            'path': concat_path,
-            'type': 'concatenated'
-        })
-    
-    return {
-        'segments': output_files,
-        'details': details
-    }
 
 @app.route('/download/<filename>')
 def download_file(filename):
+    # Security: Ensure filename is relative and doesn't contain path traversal
+    filename = secure_filename(filename)
     return send_file(
         os.path.join(app.config['OUTPUT_FOLDER'], filename),
         as_attachment=True
@@ -235,10 +331,22 @@ def download_file(filename):
 
 @app.route('/preview/<filename>')
 def preview_file(filename):
+    filename = secure_filename(filename)
     return send_file(
         os.path.join(app.config['OUTPUT_FOLDER'], filename),
         mimetype='audio/wav'
     )
+
+@app.route('/job_status/<job_id>')
+def job_status(job_id):
+    with jobs_lock:
+        job = JOBS.get(job_id)
+        if not job:
+            return jsonify({'error': 'Job not found'}), 404
+        # Don't return internal audio_files_info to client
+        client_job = job.copy()
+        client_job.pop('audio_files_info', None)
+        return jsonify(client_job)
 
 @app.route('/upload_metadata', methods=['POST'])
 def upload_metadata():
@@ -269,7 +377,6 @@ def upload_metadata():
         else:
             return jsonify({'success': False, 'error': 'Unsupported file format'}), 400
 
-        # Extract unique speakers
         speakers = sorted(list(set(s['speaker'] for s in segments)))
 
         return jsonify({
@@ -284,15 +391,6 @@ def upload_metadata():
     finally:
         if temp_dir and os.path.exists(temp_dir):
             shutil.rmtree(temp_dir, ignore_errors=True)
-
-@app.route('/get_details')
-def get_details():
-    """Get processing details for current session"""
-    details_file = os.path.join(app.config['OUTPUT_FOLDER'], 'details.json')
-    if os.path.exists(details_file):
-        with open(details_file, 'r') as f:
-            return jsonify(json.load(f))
-    return jsonify({'error': 'No details available'})
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
