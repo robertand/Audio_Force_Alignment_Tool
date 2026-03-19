@@ -207,39 +207,49 @@ class AlignmentUtils:
             })
         return segments
 
-    def reconstruct_character_track(self, aligned_segments, sr, max_duration=None):
+    def reconstruct_character_track(self, aligned_segments, sr, max_duration=None, push_overlapping=True):
         """
-        Place aligned audio segments on a track at their exact target start times.
-        aligned_segments: list of (target_start, target_end, audio_segment)
-        max_duration: total length of the track in seconds
+        Place aligned audio segments on a track.
+        - Output track starts exactly at 0.0s.
+        - Ends at least at max_duration.
+        - If push_overlapping=True, segments are pushed forward to avoid overlap.
         """
-        if not aligned_segments:
+        if not aligned_segments and max_duration is None:
             return np.array([])
 
-        # Determine total duration if not provided
-        if max_duration is None:
-            max_duration = max(s[1] for s in aligned_segments)
-            # Also check if any audio segment extends beyond its target_end
-            for start, _, audio_seg in aligned_segments:
-                end = start + (len(audio_seg) / sr)
-                max_duration = max(max_duration, end)
+        # Sort by target start time for consistent pushing
+        aligned_segments.sort(key=lambda x: x[0])
 
-        # Create empty track starting at 0:00
-        full_track = np.zeros(int(max_duration * sr) + sr)
+        placements = []
+        current_time_ptr = 0.0
 
-        for target_start, _, audio_seg in aligned_segments:
-            start_sample = int(target_start * sr)
-            end_sample = start_sample + len(audio_seg)
+        for target_start, target_end, audio_seg in aligned_segments:
+            actual_start = target_start
+            if push_overlapping:
+                # If target_start is earlier than where the previous audio ended, push it
+                actual_start = max(target_start, current_time_ptr)
 
-            # Ensure we don't exceed track length
-            if end_sample > len(full_track):
-                # Extend track if needed (should be rare if max_duration is correct)
-                padding = np.zeros(end_sample - len(full_track) + sr)
-                full_track = np.concatenate([full_track, padding])
+            duration = len(audio_seg) / sr
+            actual_end = actual_start + duration
 
-            # Place audio segment (summing in case of overlap, or just overwriting)
-            # For dialogue tracks, usually we overwrite or the segments are separate.
-            # We'll use addition to be safe if there are slight overlaps.
-            full_track[start_sample:end_sample] += audio_seg
+            placements.append((actual_start, audio_seg))
+            current_time_ptr = actual_end
+
+        # Determine final track duration
+        final_duration = current_time_ptr
+        if max_duration is not None:
+            final_duration = max(final_duration, max_duration)
+
+        total_samples = int(final_duration * sr)
+        full_track = np.zeros(total_samples)
+
+        for start_time, audio_seg in placements:
+            start_sample = int(start_time * sr)
+            if start_sample >= total_samples:
+                continue
+
+            available = total_samples - start_sample
+            use = min(len(audio_seg), available)
+            full_track[start_sample:start_sample + use] += audio_seg[:use]
 
         return full_track

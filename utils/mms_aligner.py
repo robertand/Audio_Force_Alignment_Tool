@@ -3,6 +3,7 @@ from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
 import numpy as np
 import librosa
 import difflib
+from utils.text_utils import normalize_text, strip_diacritics
 
 class MMSDialogueAligner:
     def __init__(self, model_id="MahmoudAshraf/mms-300m-1130-forced-aligner"):
@@ -83,13 +84,21 @@ class MMSDialogueAligner:
             # Search window
             search_end = min(len(transcribed_segments), search_start + 15)
 
+            norm_expected = normalize_text(expected_text)
+            strip_expected = strip_diacritics(norm_expected)
+
             for i in range(search_start, search_end):
                 transcribed = transcribed_segments[i]
                 trans_text = transcribed['text'].strip()
-                ratio = difflib.SequenceMatcher(None, expected_text.lower(), trans_text.lower()).ratio()
+                norm_trans = normalize_text(trans_text)
 
-                if ratio > highest_ratio:
-                    highest_ratio = ratio
+                ratio = difflib.SequenceMatcher(None, norm_expected, norm_trans).ratio()
+                strip_ratio = difflib.SequenceMatcher(None, strip_expected, strip_diacritics(norm_trans)).ratio()
+
+                combined_ratio = max(ratio, strip_ratio * 0.9)
+
+                if combined_ratio > highest_ratio:
+                    highest_ratio = combined_ratio
                     best_match = transcribed
                     best_match_idx = i
 

@@ -208,11 +208,9 @@
             e.preventDefault();
 
             const formData = new FormData();
-            formData.append('metadata_filename', currentMetadata.filename);
             formData.append('use_whisper', document.getElementById('useWhisper').checked);
             formData.append('aligner_type', document.getElementById('alignerType').value);
             formData.append('model_size', document.getElementById('modelSize').value);
-            formData.append('min_gap', document.getElementById('minGap').value || 0);
 
             const selects = document.querySelectorAll('.speaker-select:checked');
             if (selects.length === 0) {
@@ -236,10 +234,8 @@
                 return;
             }
 
-            // Also send back the segments data
             formData.append('segments', JSON.stringify(currentMetadata.segments));
 
-            // Show progress
             document.getElementById('progressBar').classList.remove('d-none');
             document.getElementById('processBtn').disabled = true;
             
@@ -249,30 +245,55 @@
                     body: formData
                 });
                 
-                const text = await response.text();
-                let result;
-                try {
-                    result = JSON.parse(text);
-                } catch (e) {
-                    console.error("Failed to parse JSON:", text);
-                    alert("The server returned an invalid response (not JSON). Check the console for more details.");
-                    return;
-                }
+                const result = await response.json();
                 
                 if (result.success) {
-                    displayResults(result);
+                    pollStatus(result.job_id);
                 } else {
-                    alert('Error: ' + (result.error || 'Unknown error occurred.'));
-                    if (result.traceback) console.error(result.traceback);
+                    alert('Error: ' + result.error);
+                    document.getElementById('progressBar').classList.add('d-none');
+                    document.getElementById('processBtn').disabled = false;
                 }
             } catch (error) {
                 alert('Error processing files: ' + error.message);
-                console.error(error);
-            } finally {
                 document.getElementById('progressBar').classList.add('d-none');
                 document.getElementById('processBtn').disabled = false;
             }
         });
+
+        async function pollStatus(jobId) {
+            const progressBar = document.querySelector('#progressBar .progress-bar');
+
+            try {
+                const response = await fetch(`/job/status/${jobId}`);
+                const job = await response.json();
+
+                if (job.status === 'processing' || job.status === 'queued') {
+                    progressBar.style.width = job.progress + '%';
+                    progressBar.innerText = `[${job.status.toUpperCase()}] Current: ${job.current_speaker || 'starting...'} (${job.progress}%)`;
+                    setTimeout(() => pollStatus(jobId), 1500);
+                } else if (job.status === 'completed') {
+                    progressBar.style.width = '100%';
+                    progressBar.innerText = 'All Characters Aligned Successfully!';
+                    progressBar.classList.remove('progress-bar-animated');
+                    progressBar.classList.add('bg-success');
+                    displayResults(job.result);
+                    document.getElementById('processBtn').disabled = false;
+                    setTimeout(() => {
+                        document.getElementById('progressBar').classList.add('d-none');
+                    }, 5000);
+                } else if (job.status === 'failed') {
+                    progressBar.classList.add('bg-danger');
+                    progressBar.innerText = 'Error: ' + job.error;
+                    alert('Alignment failed: ' + job.error);
+                    console.error(job.traceback);
+                    document.getElementById('processBtn').disabled = false;
+                }
+            } catch (error) {
+                console.error("Polling error:", error);
+                setTimeout(() => pollStatus(jobId), 3000);
+            }
+        }
         
         function displayResults(data) {
             const resultsDiv = document.getElementById('results');
@@ -304,8 +325,7 @@
         }
         
         function downloadAll() {
-            // In a real app, this might zip all results
-            alert('This would download a zip of all tracks.');
+            window.location.href = '/download_all';
         }
     </script>
 </body>

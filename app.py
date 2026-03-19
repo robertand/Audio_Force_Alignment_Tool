@@ -13,6 +13,9 @@ from utils.audio_processor import AudioProcessor
 from utils.vad_processor import VADProcessor
 from utils.alignment_utils import AlignmentUtils
 import traceback
+import threading
+import uuid
+import time
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'uploads'
@@ -27,6 +30,9 @@ os.makedirs(app.config['OUTPUT_FOLDER'], exist_ok=True)
 audio_processor = AudioProcessor()
 vad_processor = VADProcessor()
 alignment_utils = AlignmentUtils()
+
+# Global job storage
+jobs = {}
 
 # Lazy-loaded aligners
 _aligner = None
@@ -67,124 +73,129 @@ def handle_exception(e):
 def index():
     return render_template('index.html')
 
-@app.route('/process', methods=['POST'])
-def process_audio():
+def run_job(job_id, segments, speakers_to_process, files_dict, use_whisper, model_size, aligner_type):
     temp_dir = None
     try:
-        # Get metadata and settings
-        segments = json.loads(request.form.get('segments', '[]'))
-        use_whisper = request.form.get('use_whisper') == 'true'
-        min_gap = float(request.form.get('min_gap', 0))
-        speakers_to_process = request.form.getlist('speakers')
+        jobs[job_id]['status'] = 'processing'
+        jobs[job_id]['total_speakers'] = len(speakers_to_process)
         
-        if not segments or not speakers_to_process:
-            return jsonify({'success': False, 'error': 'Missing metadata or speakers'}), 400
-
-        # Max duration for all tracks based on metadata
         abs_max_end = max(s['end'] for s in segments) if segments else 0
-
         temp_dir = tempfile.mkdtemp(dir=app.config['UPLOAD_FOLDER'])
         
         output_tracks = []
         failed_speakers = []
         
-        # Optional Whisper Aligner
         aligner = None
         if use_whisper:
-            model_size = request.form.get('model_size', 'base')
-            aligner_type = request.form.get('aligner_type', 'whisper')
             aligner = get_aligner(model_size, aligner_type)
 
-        for speaker in speakers_to_process:
+        for i, speaker in enumerate(speakers_to_process):
             try:
-                audio_key = f'audio_{speaker}'
-                audio_file = request.files.get(audio_key)
+                jobs[job_id]['current_speaker'] = speaker
+                jobs[job_id]['progress'] = int((i / len(speakers_to_process)) * 100)
 
-                if not audio_file:
-                    continue # Skip if no audio provided for this selected speaker
+                audio_content = files_dict.get(speaker)
+                if not audio_content:
+                    continue
 
                 audio_path = os.path.join(temp_dir, f"input_{secure_filename(speaker)}.wav")
-                audio_file.save(audio_path)
+                with open(audio_path, 'wb') as f:
+                    f.write(audio_content)
 
-                # Load input audio
                 char_audio, sr = audio_processor.load_audio(audio_path)
-
-                # Filter segments for this character
                 char_segments = [s for s in segments if s['speaker'] == speaker]
-
                 aligned_for_reconstruction = []
 
                 if use_whisper and aligner:
-                    # Use Aligner to find where the dialogue actually is
                     alignments = aligner.align_character_audio(audio_path, char_segments)
-
                     for entry in alignments:
                         orig = entry['original']
                         aligned = entry['aligned']
-
                         if aligned:
-                            # Extract the segment from the character's audio based on Aligner's timing
                             extracted = audio_processor.extract_segment(
                                 char_audio, sr, aligned['start'], aligned['end'], orig.get('text_ro', '')
                             )
                             aligned_for_reconstruction.append((orig['start'], orig['end'], extracted))
-                        else:
-                            # Fallback: exact duration copy from input audio if alignment failed completely
-                            # (Though MMS aligner now has its own fallback)
-                            pass
                 else:
-                    # No Aligner: Simple sequential copy based on metadata durations
                     current_ptr = 0.0
                     total_dur = len(char_audio) / sr
                     for orig in char_segments:
                         dur = orig['end'] - orig['start']
                         start = min(current_ptr, total_dur)
                         end = min(current_ptr + dur, total_dur)
-
                         extracted = char_audio[int(start*sr):int(end*sr)]
                         aligned_for_reconstruction.append((orig['start'], orig['end'], extracted))
                         current_ptr = end
 
                 if aligned_for_reconstruction:
-                    # Build the full track for this character
                     full_track = alignment_utils.reconstruct_character_track(
                         aligned_for_reconstruction, sr, max_duration=abs_max_end
                     )
-
+                    # Use a stable filename for the character track so it persists even if processing is repeated
                     output_filename = f"track_{secure_filename(speaker)}.wav"
                     output_path = os.path.join(app.config['OUTPUT_FOLDER'], output_filename)
                     sf.write(output_path, full_track, sr)
-
-                    output_tracks.append({
-                        'speaker': speaker,
-                        'file': output_filename
-                    })
+                    output_tracks.append({'speaker': speaker, 'file': output_filename})
             except Exception as speaker_err:
                 traceback.print_exc()
-                failed_speakers.append({
-                    'speaker': speaker,
-                    'error': str(speaker_err)
-                })
+                failed_speakers.append({'speaker': speaker, 'error': str(speaker_err)})
 
-        return jsonify({
+        jobs[job_id]['status'] = 'completed'
+        jobs[job_id]['progress'] = 100
+        jobs[job_id]['result'] = {
             'success': True,
-            'message': 'Alignment completed successfully' if not failed_speakers else 'Alignment completed with partial errors',
             'output_files': output_tracks,
             'failed_speakers': failed_speakers
-        })
-        
+        }
     except Exception as e:
-        error_details = traceback.format_exc()
-        print(f"Error in process_audio: {error_details}")
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'traceback': error_details
-        }), 500
+        jobs[job_id]['status'] = 'failed'
+        jobs[job_id]['error'] = str(e)
+        jobs[job_id]['traceback'] = traceback.format_exc()
     finally:
-        # Cleanup temp files after sending response
         if temp_dir and os.path.exists(temp_dir):
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+@app.route('/process', methods=['POST'])
+def process_audio():
+    try:
+        segments = json.loads(request.form.get('segments', '[]'))
+        use_whisper = request.form.get('use_whisper') == 'true'
+        speakers_to_process = request.form.getlist('speakers')
+        model_size = request.form.get('model_size', 'base')
+        aligner_type = request.form.get('aligner_type', 'whisper')
+
+        if not segments or not speakers_to_process:
+            return jsonify({'success': False, 'error': 'Missing metadata or speakers'}), 400
+
+        files_dict = {}
+        for speaker in speakers_to_process:
+            audio_file = request.files.get(f'audio_{speaker}')
+            if audio_file:
+                files_dict[speaker] = audio_file.read()
+
+        job_id = str(uuid.uuid4())
+        jobs[job_id] = {
+            'id': job_id,
+            'status': 'queued',
+            'progress': 0,
+            'created_at': time.time()
+        }
+
+        thread = threading.Thread(target=run_job, args=(
+            job_id, segments, speakers_to_process, files_dict, use_whisper, model_size, aligner_type
+        ))
+        thread.start()
+
+        return jsonify({'success': True, 'job_id': job_id})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/job/status/<job_id>')
+def job_status(job_id):
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({'success': False, 'error': 'Job not found'}), 404
+    return jsonify(job)
 
 def process_alignment(audio_path, df, timecode_data, temp_dir):
     """Main alignment processing function"""
@@ -289,6 +300,17 @@ def preview_file(filename):
         os.path.join(app.config['OUTPUT_FOLDER'], filename),
         mimetype='audio/wav'
     )
+
+@app.route('/download_all')
+def download_all():
+    import zipfile
+    zip_path = os.path.join(app.config['OUTPUT_FOLDER'], 'all_tracks.zip')
+    with zipfile.ZipFile(zip_path, 'w') as zipf:
+        for root, dirs, files in os.walk(app.config['OUTPUT_FOLDER']):
+            for file in files:
+                if file.endswith('.wav'):
+                    zipf.write(os.path.join(root, file), file)
+    return send_file(zip_path, as_attachment=True)
 
 @app.route('/upload_metadata', methods=['POST'])
 def upload_metadata():

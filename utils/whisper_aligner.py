@@ -2,6 +2,7 @@ import numpy as np
 import difflib
 import whisper as openai_whisper
 import torch
+from utils.text_utils import normalize_text, strip_diacritics
 
 class DialogueAligner:
     def __init__(self, model_name="base"):
@@ -70,22 +71,34 @@ class DialogueAligner:
             search_start = last_match_idx + 1
             search_end = min(len(transcribed_segments), search_start + 15)
 
+            # Text normalization for better matching
+            norm_expected = normalize_text(expected_text)
+            strip_expected = strip_diacritics(norm_expected)
+
             for i in range(search_start, search_end):
                 transcribed = transcribed_segments[i]
                 trans_text = transcribed['text'].strip()
-                ratio = difflib.SequenceMatcher(None, expected_text.lower(), trans_text.lower()).ratio()
+                norm_trans = normalize_text(trans_text)
 
-                if ratio > highest_ratio:
-                    highest_ratio = ratio
+                # Try three levels of matching
+                # 1. Normalized comparison
+                ratio = difflib.SequenceMatcher(None, norm_expected, norm_trans).ratio()
+
+                # 2. Even more aggressive diacritic-stripped comparison
+                strip_ratio = difflib.SequenceMatcher(None, strip_expected, strip_diacritics(norm_trans)).ratio()
+
+                combined_ratio = max(ratio, strip_ratio * 0.9) # Slightly penalize diacritic-stripped matching
+
+                if combined_ratio > highest_ratio:
+                    highest_ratio = combined_ratio
                     best_match = transcribed
                     best_match_idx = i
 
-            # 2. Sequential Fallback: If no good text match, take the next chronological segment
-            # as long as it exists and isn't too far from the last one
+            # Sequential fallback for consistency
             if highest_ratio < 0.35 and search_start < len(transcribed_segments):
                 best_match = transcribed_segments[search_start]
                 best_match_idx = search_start
-                highest_ratio = 0.2  # Placeholder for fallback confidence
+                highest_ratio = 0.1
 
             if best_match:
                 aligned_results.append({
