@@ -337,6 +337,18 @@ def preview_file(filename):
         mimetype='audio/wav'
     )
 
+@app.route('/get_original_audio/<job_id>/<speaker>')
+def get_original_audio(job_id, speaker):
+    with jobs_lock:
+        job = JOBS.get(job_id)
+        if not job:
+            return jsonify({'error': 'Job not found'}), 404
+        audio_info = job['audio_files_info'].get(speaker)
+        if not audio_info:
+            return jsonify({'error': 'Speaker audio not found'}), 404
+
+        return send_file(audio_info['path'], mimetype='audio/wav')
+
 @app.route('/job_status/<job_id>')
 def job_status(job_id):
     with jobs_lock:

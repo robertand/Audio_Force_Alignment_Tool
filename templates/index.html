@@ -103,6 +103,7 @@
                                         <th>Audio Start</th>
                                         <th>Audio End</th>
                                         <th>Conf.</th>
+                                        <th>Preview</th>
                                     </tr>
                                 </thead>
                                 <tbody id="segmentRows">
@@ -294,6 +295,54 @@
             poll();
         }
 
+        let activeAudio = null;
+        let audioStopTimeout = null;
+
+        function previewSegment(btn, speaker, index) {
+            if (activeAudio) {
+                activeAudio.pause();
+                clearTimeout(audioStopTimeout);
+                if (activeAudio.btn) activeAudio.btn.innerText = 'Play';
+                if (activeAudio === btn.audio) {
+                    activeAudio = null;
+                    return;
+                }
+            }
+
+            const row = btn.closest('tr');
+            const start = parseFloat(row.querySelector('.source-start').value);
+            const end = parseFloat(row.querySelector('.source-end').value);
+
+            if (isNaN(start) || isNaN(end) || start >= end) {
+                alert('Invalid start/end times for preview');
+                return;
+            }
+
+            const url = `/get_original_audio/${currentJobId}/${speaker}`;
+            const audio = new Audio(url);
+            activeAudio = audio;
+            audio.btn = btn;
+            btn.audio = audio;
+
+            audio.addEventListener('loadedmetadata', () => {
+                audio.currentTime = start;
+                audio.play();
+                btn.innerText = 'Stop';
+
+                const duration = (end - start) * 1000;
+                audioStopTimeout = setTimeout(() => {
+                    audio.pause();
+                    btn.innerText = 'Play';
+                    activeAudio = null;
+                }, duration);
+            });
+
+            audio.addEventListener('error', (e) => {
+                console.error('Audio error:', e);
+                alert('Error playing audio preview');
+            });
+        }
+
         function showStep3(results) {
             document.getElementById('step2').classList.add('d-none');
             document.getElementById('step3').classList.remove('d-none');
@@ -329,6 +378,9 @@
                             <span class="badge ${seg.confidence > 0.7 ? 'bg-success' : (seg.confidence > 0.4 ? 'bg-warning' : 'bg-danger')}">
                                 ${Math.round(seg.confidence * 100)}%
                             </span>
+                        </td>
+                        <td class="align-middle text-center">
+                            <button class="btn btn-sm btn-info" onclick="previewSegment(this, '${seg.speaker}', ${index})">Play</button>
                         </td>
                     </tr>
                 `;
