@@ -54,6 +54,13 @@ audio_processor = AudioProcessor()
 vad_processor = VADProcessor()
 alignment_utils = AlignmentUtils()
 
+try:
+    from utils.ctc_aligner import CTCAligner
+    ctc_aligner = CTCAligner(device=device)
+except ImportError:
+    ctc_aligner = None
+    logger.warning("CTCAligner not available")
+
 # Job management with metadata
 JOBS = {}
 jobs_lock = threading.Lock()
@@ -139,18 +146,14 @@ cleanup_thread.start()
 logger.info("Cleanup thread started")
 
 def background_alignment(job_id, segments, speakers_to_process, audio_files_info, 
-                        use_whisper, model_name, initial_prompt, use_mms=False):
+                        use_whisper, model_name, initial_prompt, use_mms=False, use_ctc=False):
     """Background task for alignment processing"""
     try:
         aligner = None
         if use_whisper:
             aligner = get_whisper_aligner(model_name)
-            if aligner is None:
-                raise Exception("Failed to initialize Whisper aligner")
         elif use_mms:
             aligner = get_mms_aligner()
-            if aligner is None:
-                raise Exception("Failed to initialize MMS aligner")
 
         all_alignments = []
         total_steps = len(speakers_to_process)
@@ -173,7 +176,41 @@ def background_alignment(job_id, segments, speakers_to_process, audio_files_info
             # Filter segments for this character
             char_segments = [s for s in segments if s['speaker'] == speaker]
 
-            if aligner:
+            if use_ctc and ctc_aligner:
+                # Use the new CTC Forced Aligner
+                try:
+                    text_list = [s.get('text_ro', '') for s in char_segments]
+                    results = ctc_aligner.align(audio_path, text_list, language="ro")
+
+                    for i, res in enumerate(results):
+                        orig = char_segments[i]
+                        all_alignments.append({
+                            'speaker': speaker,
+                            'text_ro': orig.get('text_ro', ''),
+                            'text_en': orig.get('text_en', ''),
+                            'csv_start': orig['start'],
+                            'csv_end': orig['end'],
+                            'original_audio_filename': audio_info['filename'],
+                            'source_start': res['start'],
+                            'source_end': res['end'],
+                            'confidence': res.get('score', 1.0)
+                        })
+                except Exception as e:
+                    logger.error(f"CTC Alignment failed for {speaker}: {e}")
+                    # Fallback to direct mapping
+                    for orig in char_segments:
+                        all_alignments.append({
+                            'speaker': speaker,
+                            'text_ro': orig.get('text_ro', ''),
+                            'text_en': orig.get('text_en', ''),
+                            'csv_start': orig['start'],
+                            'csv_end': orig['end'],
+                            'original_audio_filename': audio_info['filename'],
+                            'source_start': 0,
+                            'source_end': orig['end'] - orig['start'],
+                            'confidence': 0.0
+                        })
+            elif aligner:
                 # Use aligner to find where the dialogue actually is
                 try:
                     alignments = aligner.align_character_audio(
@@ -276,6 +313,7 @@ def process_audio():
         segments = json.loads(request.form.get('segments', '[]'))
         use_whisper = request.form.get('use_whisper') == 'true'
         use_mms = request.form.get('use_mms') == 'true'
+        use_ctc = request.form.get('use_ctc') == 'true'
         speakers_to_process = request.form.getlist('speakers')
         model_name = request.form.get('whisper_model', 'base')
         initial_prompt = request.form.get('initial_prompt', '')
@@ -342,7 +380,7 @@ def process_audio():
         thread = threading.Thread(
             target=background_alignment,
             args=(job_id, segments, speakers_to_process, audio_files_info, 
-                  use_whisper, model_name, initial_prompt, use_mms)
+                  use_whisper, model_name, initial_prompt, use_mms, use_ctc)
         )
         thread.daemon = True
         thread.start()
@@ -540,13 +578,18 @@ def get_waveform_data(job_id, speaker):
         if target_points > 10000: target_points = 10000
 
         if len(audio) > target_points:
-            # Simple max-pooling for peaks
+            # Min/Max pooling for peaks (Standard format for waveform libraries)
             win_size = len(audio) // target_points
             peaks = []
             for i in range(0, len(audio) - win_size, win_size):
-                peaks.append(float(np.max(np.abs(audio[i:i+win_size]))))
+                window = audio[i:i+win_size]
+                peaks.append(float(np.min(window)))
+                peaks.append(float(np.max(window)))
         else:
-            peaks = [float(x) for x in audio]
+            peaks = []
+            for x in audio:
+                peaks.append(float(x))
+                peaks.append(float(x))
 
         return jsonify({
             'peaks': peaks,
