@@ -167,6 +167,12 @@
                         <h2 class="text-2xl font-semibold">Review and Adjust Segments</h2>
                     </div>
                     <div class="flex space-x-2">
+                        <button class="bg-indigo-500 text-white px-3 py-2 rounded-lg hover:bg-indigo-600 transition-colors text-xs font-bold" onclick="adjustAllSourceTimes(-0.5, 0)">
+                            <i class="fas fa-step-backward mr-1"></i> -0.5s In
+                        </button>
+                        <button class="bg-indigo-500 text-white px-3 py-2 rounded-lg hover:bg-indigo-600 transition-colors text-xs font-bold" onclick="adjustAllSourceTimes(0, 0.5)">
+                            <i class="fas fa-step-forward mr-1"></i> +0.5s Out
+                        </button>
                         <button class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors text-sm" id="exportCsvBtn">
                             <i class="fas fa-file-csv mr-2"></i>CSV
                         </button>
@@ -793,6 +799,35 @@
 
             html += '</div>';
             resultsDiv.innerHTML = html;
+        }
+
+        function adjustAllSourceTimes(startDelta, endDelta) {
+            const blocks = document.querySelectorAll('#segmentList > div');
+            blocks.forEach(block => {
+                const startInput = block.querySelector('.source-start');
+                const endInput = block.querySelector('.source-end');
+
+                if (!startInput || !endInput) return;
+
+                if (startDelta !== 0) {
+                    const val = parseFloat(startInput.value);
+                    if (!isNaN(val)) {
+                        const newVal = Math.max(0, val + startDelta);
+                        startInput.value = newVal.toFixed(2);
+                        startInput.dispatchEvent(new Event('input'));
+                    }
+                }
+
+                if (endDelta !== 0) {
+                    const val = parseFloat(endInput.value);
+                    if (!isNaN(val)) {
+                        const newVal = val + endDelta;
+                        endInput.value = newVal.toFixed(2);
+                        endInput.dispatchEvent(new Event('input'));
+                    }
+                }
+            });
+            showToast(`Adjusted all segments: ${startDelta !== 0 ? 'In ' + (startDelta > 0 ? '+' : '') + startDelta + 's' : ''} ${endDelta !== 0 ? 'Out ' + (endDelta > 0 ? '+' : '') + endDelta + 's' : ''}`, 'success');
         }
 
         function startNew() {
