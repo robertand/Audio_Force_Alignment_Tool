@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Audio Force Alignment Tool</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
         @keyframes pulse {
@@ -160,43 +161,28 @@
         <!-- Step 3: Segment Editor -->
         <div id="step3" class="hidden">
             <div class="bg-white rounded-xl shadow-lg p-8">
-                <div class="flex items-center mb-6">
-                    <div class="w-10 h-10 rounded-full gradient-bg text-white flex items-center justify-center font-bold mr-4">3</div>
-                    <h2 class="text-2xl font-semibold">Review and Adjust Segments</h2>
+                <div class="flex items-center justify-between mb-6">
+                    <div class="flex items-center">
+                        <div class="w-10 h-10 rounded-full gradient-bg text-white flex items-center justify-center font-bold mr-4">3</div>
+                        <h2 class="text-2xl font-semibold">Review and Adjust Segments</h2>
+                    </div>
+                    <div class="flex space-x-2">
+                        <button class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors text-sm" id="exportCsvBtn">
+                            <i class="fas fa-file-csv mr-2"></i>CSV
+                        </button>
+                        <button class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm" id="exportJsonBtn">
+                            <i class="fas fa-file-code mr-2"></i>JSON
+                        </button>
+                    </div>
                 </div>
 
-                <div class="mb-4 flex space-x-2">
-                    <button class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors" id="exportCsvBtn">
-                        <i class="fas fa-file-csv mr-2"></i>Export CSV
-                    </button>
-                    <button class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors" id="exportJsonBtn">
-                        <i class="fas fa-file-code mr-2"></i>Export JSON
-                    </button>
+                <div id="segmentList" class="space-y-6">
+                    <!-- Segment blocks will be added dynamically -->
                 </div>
 
-                <div class="overflow-x-auto">
-                    <table class="min-w-full divide-y divide-gray-200">
-                        <thead class="bg-gray-50">
-                            <tr>
-                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Speaker</th>
-                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Text</th>
-                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">CSV Start</th>
-                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">CSV End</th>
-                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Audio Start</th>
-                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Audio End</th>
-                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Confidence</th>
-                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="segmentRows" class="bg-white divide-y divide-gray-200">
-                            <!-- Rows will be added dynamically -->
-                        </tbody>
-                    </table>
-                </div>
-
-                <div class="mt-6">
-                    <button class="w-full bg-indigo-600 text-white py-3 rounded-lg font-semibold hover:bg-indigo-700 transition-colors" id="generateFinalBtn">
-                        Generate Final Tracks
+                <div class="mt-8 border-t pt-6">
+                    <button class="w-full bg-indigo-600 text-white py-4 rounded-xl font-bold text-lg shadow-lg hover:bg-indigo-700 transition-all transform hover:-translate-y-1" id="generateFinalBtn">
+                        <i class="fas fa-magic mr-2"></i>Generate Final Tracks
                     </button>
                 </div>
             </div>
@@ -276,6 +262,7 @@
         let currentJobId = null;
         let jobAlignmentResults = null;
         let activeAudio = null;
+        let speakerWaveforms = {}; // Cache for speaker waveform peaks
 
         // Initialize
         loadSystemInfo();
@@ -475,50 +462,73 @@
             poll();
         }
 
-        function showStep3(results) {
+        async function showStep3(results) {
             document.getElementById('step2').classList.add('hidden');
             document.getElementById('step3').classList.remove('hidden');
             
-            const tbody = document.getElementById('segmentRows');
-            tbody.innerHTML = '';
+            const list = document.getElementById('segmentList');
+            list.innerHTML = '';
+
+            // Prefetch waveforms for all unique speakers in parallel
+            const speakers = [...new Set(results.map(s => s.speaker))];
+            await Promise.all(speakers.map(async (speaker) => {
+                if (!speakerWaveforms[speaker]) {
+                    try {
+                        const resp = await fetch(`/api/waveform-data/${currentJobId}/${speaker}`);
+                        speakerWaveforms[speaker] = await resp.json();
+                    } catch (e) {
+                        console.error(`Failed to load waveform for ${speaker}:`, e);
+                    }
+                }
+            }));
 
             results.forEach((seg, index) => {
-                const confidenceClass = seg.confidence > 0.7 ? 'bg-green-100 text-green-800' :
-                                       seg.confidence > 0.4 ? 'bg-yellow-100 text-yellow-800' :
-                                       'bg-red-100 text-red-800';
+                const confidenceClass = seg.confidence > 0.7 ? 'border-green-500' :
+                                       seg.confidence > 0.4 ? 'border-yellow-500' :
+                                       'border-red-500';
                 
-                const row = document.createElement('tr');
-                row.innerHTML = `
-                    <td class="px-4 py-3">
-                        <span class="font-medium">${seg.speaker}</span>
-                    </td>
-                    <td class="px-4 py-3 max-w-xs">
-                        <div class="truncate" title="${seg.text_ro}">${seg.text_ro}</div>
-                    </td>
-                    <td class="px-4 py-3">
-                        <input type="number" step="0.01" class="w-20 px-2 py-1 border rounded csv-start" value="${seg.csv_start}">
-                    </td>
-                    <td class="px-4 py-3">
-                        <input type="number" step="0.01" class="w-20 px-2 py-1 border rounded csv-end" value="${seg.csv_end}">
-                    </td>
-                    <td class="px-4 py-3">
-                        <input type="number" step="0.01" class="w-20 px-2 py-1 border rounded source-start" value="${seg.source_start}">
-                    </td>
-                    <td class="px-4 py-3">
-                        <input type="number" step="0.01" class="w-20 px-2 py-1 border rounded source-end" value="${seg.source_end}">
-                    </td>
-                    <td class="px-4 py-3">
-                        <span class="px-2 py-1 rounded text-xs font-medium ${confidenceClass}">
-                            ${Math.round(seg.confidence * 100)}%
-                        </span>
-                    </td>
-                    <td class="px-4 py-3">
-                        <button onclick="previewSegment(this, '${seg.speaker}')" class="text-indigo-600 hover:text-indigo-800">
-                            <i class="fas fa-play"></i>
-                        </button>
-                    </td>
+                const block = document.createElement('div');
+                block.className = `bg-white rounded-xl shadow border-l-4 ${confidenceClass} overflow-hidden`;
+                block.id = `seg-${index}`;
+                block.innerHTML = `
+                    <div class="p-4 bg-gray-50 flex items-center justify-between border-b">
+                        <div class="flex items-center space-x-4">
+                            <span class="font-bold text-indigo-900">${seg.speaker}</span>
+                            <span class="text-sm text-gray-600 italic truncate max-w-md" title="${seg.text_ro}">${seg.text_ro}</span>
+                        </div>
+                        <div class="flex items-center space-x-6 text-sm">
+                            <div class="flex space-x-2">
+                                <label class="text-gray-500">CSV:</label>
+                                <input type="number" step="0.01" class="w-16 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center csv-start" value="${seg.csv_start}">
+                                <span>-</span>
+                                <input type="number" step="0.01" class="w-16 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center csv-end" value="${seg.csv_end}">
+                            </div>
+                            <div class="flex space-x-2">
+                                <label class="text-gray-500">Source:</label>
+                                <input type="number" step="0.01" class="w-16 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center source-start" value="${seg.source_start}">
+                                <span>-</span>
+                                <input type="number" step="0.01" class="w-16 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center source-end" value="${seg.source_end}">
+                            </div>
+                            <div class="flex space-x-2 items-center">
+                                <label class="text-gray-500">Tempo:</label>
+                                <input type="number" step="0.01" min="0.5" max="2.0" class="w-14 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center tempo" value="1.00">
+                                <span class="text-xs text-gray-400">x</span>
+                            </div>
+                            <button onclick="previewSegment(this, '${seg.speaker}', ${index})" class="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 hover:bg-indigo-600 hover:text-white transition-colors">
+                                <i class="fas fa-play"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="p-2 relative bg-gray-50/50">
+                        <div id="waveform-${index}" class="w-full h-10"></div>
+                        <div class="absolute bottom-1 right-2 flex space-x-4 text-[11px] font-bold uppercase tracking-wider">
+                           <span class="text-gray-400">Confidence: ${Math.round(seg.confidence * 100)}%</span>
+                           <span class="delta-label"></span>
+                        </div>
+                    </div>
                 `;
-                tbody.appendChild(row);
+                list.appendChild(block);
+                initWaveform(index, seg.speaker, seg.source_start, seg.source_end);
             });
 
             // Export functionality
@@ -526,19 +536,82 @@
             document.getElementById('exportJsonBtn').onclick = () => exportResults('json');
         }
 
-        function previewSegment(btn, speaker) {
+        let waveforms = {};
+
+        function initWaveform(index, speaker, start, end) {
+            const container = document.getElementById(`waveform-${index}`);
+            const speakerData = speakerWaveforms[speaker];
+
+            if (!speakerData || !speakerData.peaks) return;
+
+            const ws = WaveSurfer.create({
+                container: container,
+                waveColor: '#cbd5e1',
+                progressColor: '#6366f1',
+                height: 40,
+                interact: false,
+                peaks: [speakerData.peaks],
+                duration: speakerData.duration,
+            });
+
+            waveforms[index] = ws;
+
+            const block = document.getElementById(`seg-${index}`);
+            const inputs = block.querySelectorAll('input');
+
+            const updateView = () => {
+                const s = parseFloat(block.querySelector('.source-start').value);
+                const e = parseFloat(block.querySelector('.source-end').value);
+                const csvS = parseFloat(block.querySelector('.csv-start').value);
+                const csvE = parseFloat(block.querySelector('.csv-end').value);
+                const tempo = parseFloat(block.querySelector('.tempo').value) || 1.0;
+
+                // Update Waveform zoom/view
+                if (!isNaN(s) && !isNaN(e) && e > s) {
+                    ws.zoom(container.clientWidth / (e - s));
+                    container.scrollLeft = s * (container.scrollWidth / speakerData.duration);
+                }
+
+                // Update Delta Label
+                const deltaLabel = block.querySelector('.delta-label');
+                const targetDuration = csvE - csvS;
+                const sourceDuration = (e - s) / tempo;
+                const diff = sourceDuration - targetDuration;
+
+                if (Math.abs(diff) < 0.01) {
+                    deltaLabel.textContent = 'Perfect Match';
+                    deltaLabel.className = 'delta-label text-green-500';
+                } else if (diff > 0) {
+                    deltaLabel.textContent = `+${diff.toFixed(2)}s Added`;
+                    deltaLabel.className = 'delta-label text-blue-500';
+                } else {
+                    deltaLabel.textContent = `${diff.toFixed(2)}s Removed`;
+                    deltaLabel.className = 'delta-label text-orange-500';
+                }
+            };
+
+            inputs.forEach(input => input.addEventListener('input', updateView));
+
+            // Initial view update
+            setTimeout(updateView, 100);
+        }
+
+        function previewSegment(btn, speaker, index) {
             if (activeAudio) {
                 activeAudio.pause();
+                const oldBtn = activeAudio.btn;
+                if (oldBtn) oldBtn.innerHTML = '<i class="fas fa-play"></i>';
+
                 if (activeAudio === btn.audio) {
                     activeAudio = null;
-                    btn.innerHTML = '<i class="fas fa-play"></i>';
                     return;
                 }
             }
 
-            const row = btn.closest('tr');
-            const start = parseFloat(row.querySelector('.source-start').value);
-            const end = parseFloat(row.querySelector('.source-end').value);
+            const block = document.getElementById(`seg-${index}`);
+            const start = parseFloat(block.querySelector('.source-start').value);
+            const end = parseFloat(block.querySelector('.source-end').value);
+            const tempo = parseFloat(block.querySelector('.tempo').value) || 1.0;
 
             if (isNaN(start) || isNaN(end) || start >= end) {
                 showToast('Invalid start/end times', 'error');
@@ -547,7 +620,9 @@
 
             const url = `/api/original-audio/${currentJobId}/${speaker}`;
             const audio = new Audio(url);
+            audio.playbackRate = tempo;
             activeAudio = audio;
+            audio.btn = btn;
             btn.audio = audio;
             btn.innerHTML = '<i class="fas fa-stop"></i>';
 
@@ -555,13 +630,29 @@
                 audio.currentTime = start;
                 audio.play();
 
+                // Sync waveform progress
+                const ws = waveforms[index];
+                const playStartTime = Date.now();
+                const duration = (end - start) / tempo;
+
+                const progressInterval = setInterval(() => {
+                    if (activeAudio !== audio || audio.paused) {
+                        clearInterval(progressInterval);
+                        return;
+                    }
+                    const elapsed = (Date.now() - playStartTime) / 1000;
+                    const currentPos = start + (elapsed * tempo);
+                    ws.setTime(currentPos);
+                }, 50);
+
                 setTimeout(() => {
                     if (activeAudio === audio) {
                         audio.pause();
                         btn.innerHTML = '<i class="fas fa-play"></i>';
                         activeAudio = null;
+                        ws.setTime(start);
                     }
-                }, (end - start) * 1000);
+                }, duration * 1000);
             });
 
             audio.addEventListener('ended', () => {
@@ -571,26 +662,27 @@
         }
 
         function exportResults(format) {
-            const rows = document.querySelectorAll('#segmentRows tr');
+            const blocks = document.querySelectorAll('#segmentList > div');
             const data = [];
 
-            rows.forEach((row, index) => {
+            blocks.forEach((block, index) => {
                 const orig = jobAlignmentResults[index];
                 data.push({
                     speaker: orig.speaker,
                     text_ro: orig.text_ro,
                     text_en: orig.text_en,
-                    csv_start: parseFloat(row.querySelector('.csv-start').value),
-                    csv_end: parseFloat(row.querySelector('.csv-end').value),
-                    source_start: parseFloat(row.querySelector('.source-start').value),
-                    source_end: parseFloat(row.querySelector('.source-end').value),
+                    csv_start: parseFloat(block.querySelector('.csv-start').value),
+                    csv_end: parseFloat(block.querySelector('.csv-end').value),
+                    source_start: parseFloat(block.querySelector('.source-start').value),
+                    source_end: parseFloat(block.querySelector('.source-end').value),
+                    tempo: parseFloat(block.querySelector('.tempo').value) || 1.0,
                     confidence: orig.confidence
                 });
             });
 
             let content, filename, mime;
             if (format === 'csv') {
-                const headers = ['speaker', 'text_ro', 'text_en', 'csv_start', 'csv_end', 'source_start', 'source_end', 'confidence'];
+                const headers = ['speaker', 'text_ro', 'text_en', 'csv_start', 'csv_end', 'source_start', 'source_end', 'tempo', 'confidence'];
                 const csv = [headers.join(',')];
                 data.forEach(row => {
                     csv.push(headers.map(h => row[h]).join(','));
@@ -620,17 +712,18 @@
             generateBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Generating...';
 
             // Collect adjusted data
-            const rows = document.querySelectorAll('#segmentRows tr');
+            const blocks = document.querySelectorAll('#segmentList > div');
             const adjustedAlignments = [];
 
-            rows.forEach((row, index) => {
+            blocks.forEach((block, index) => {
                 const orig = jobAlignmentResults[index];
                 adjustedAlignments.push({
                     ...orig,
-                    csv_start: parseFloat(row.querySelector('.csv-start').value),
-                    csv_end: parseFloat(row.querySelector('.csv-end').value),
-                    source_start: parseFloat(row.querySelector('.source-start').value),
-                    source_end: parseFloat(row.querySelector('.source-end').value)
+                    csv_start: parseFloat(block.querySelector('.csv-start').value),
+                    csv_end: parseFloat(block.querySelector('.csv-end').value),
+                    source_start: parseFloat(block.querySelector('.source-start').value),
+                    source_end: parseFloat(block.querySelector('.source-end').value),
+                    tempo: parseFloat(block.querySelector('.tempo').value) || 1.0
                 });
             });
 

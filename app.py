@@ -412,11 +412,13 @@ def generate_final():
             # Extract segments
             for seg in speaker_segs:
                 try:
+                    tempo = float(seg.get('tempo', 1.0))
                     extracted = audio_processor.extract_segment(
                         audio, sr,
                         float(seg['source_start']),
                         float(seg['source_end']),
-                        seg.get('text_ro', '')
+                        seg.get('text_ro', ''),
+                        tempo=tempo
                     )
 
                     aligned_for_reconstruction.append((
@@ -512,6 +514,48 @@ def get_original_audio(job_id, speaker):
                 return send_file(file_info['path'], mimetype='audio/wav')
         
         return jsonify({'error': 'Speaker audio not found'}), 404
+
+@app.route('/api/waveform-data/<job_id>/<speaker>')
+def get_waveform_data(job_id, speaker):
+    """Get downsampled waveform peaks for visualization"""
+    with jobs_lock:
+        job = JOBS.get(job_id)
+        if not job:
+            return jsonify({'error': 'Job not found'}), 404
+
+        audio_path = None
+        for file_info in job.get('files', []):
+            if speaker in file_info.get('path', ''):
+                audio_path = file_info.get('path')
+                break
+
+        if not audio_path or not os.path.exists(audio_path):
+            return jsonify({'error': 'Speaker audio not found'}), 404
+
+    try:
+        audio, sr = audio_processor.load_audio(audio_path)
+
+        # Downsample to ~100 points per second for UI performance
+        target_points = int(len(audio) / sr * 100)
+        if target_points > 10000: target_points = 10000
+
+        if len(audio) > target_points:
+            # Simple max-pooling for peaks
+            win_size = len(audio) // target_points
+            peaks = []
+            for i in range(0, len(audio) - win_size, win_size):
+                peaks.append(float(np.max(np.abs(audio[i:i+win_size]))))
+        else:
+            peaks = [float(x) for x in audio]
+
+        return jsonify({
+            'peaks': peaks,
+            'sample_rate': sr,
+            'duration': len(audio) / sr
+        })
+    except Exception as e:
+        logger.error(f"Waveform data error: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/job/<job_id>')
 def job_status(job_id):

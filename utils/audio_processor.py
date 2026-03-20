@@ -91,8 +91,8 @@ class AudioProcessor:
         min_idx = np.argmin(np.abs(search_region))
         return start_search + min_idx
 
-    def extract_segment(self, audio, sr, start_time, end_time, text=""):
-        """Extract audio segment with zero-crossing alignment and interjection padding"""
+    def extract_segment(self, audio, sr, start_time, end_time, text="", tempo=1.0):
+        """Extract audio segment with zero-crossing alignment, interjection padding, and tempo adjustment"""
 
         # Check for interjections in brackets like [laughs]
         padding = 0.05  # Standard 50ms padding
@@ -113,7 +113,14 @@ class AudioProcessor:
 
         # Extract
         segment = audio[start_sample:end_sample]
-        
+
+        # Apply tempo adjustment if needed
+        if tempo != 1.0 and len(segment) > 0:
+            try:
+                segment = librosa.effects.time_stretch(segment, rate=tempo)
+            except Exception as e:
+                logger.error(f"Time stretch failed: {e}")
+
         # Apply small fade in/out to avoid clicks
         fade_length = min(int(0.01 * sr), len(segment) // 4)  # 10ms fade or less
         if len(segment) > 2 * fade_length:
@@ -121,7 +128,7 @@ class AudioProcessor:
             fade_out = np.linspace(1, 0, fade_length)
             segment[:fade_length] *= fade_in
             segment[-fade_length:] *= fade_out
-            
+
         return segment
     
     def detect_silence(self, audio, sr, threshold=0.01, min_silence_duration=0.1):
