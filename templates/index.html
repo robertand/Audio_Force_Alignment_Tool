@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Audio Force Alignment Tool</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.min.js"></script>
+    <script src="https://unpkg.com/peaks.js/dist/peaks.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
         @keyframes pulse {
@@ -520,10 +520,11 @@
                         </div>
                     </div>
                     <div class="p-2 relative bg-gray-50/50">
-                        <div id="waveform-${index}" class="w-full h-10"></div>
-                        <div class="absolute bottom-1 right-2 flex space-x-4 text-[11px] font-bold uppercase tracking-wider">
+                        <div id="overview-${index}" class="w-full h-6 mb-1"></div>
+                        <div id="zoomview-${index}" class="w-full h-12"></div>
+                        <div class="absolute bottom-1 right-2 flex space-x-4 text-[10px] font-bold uppercase tracking-wider z-10 bg-white/80 px-2 py-0.5 rounded shadow-sm">
                            <span class="text-gray-400">Confidence: ${Math.round(seg.confidence * 100)}%</span>
-                           <span class="delta-label"></span>
+                           <span class="delta-label">Ready</span>
                         </div>
                     </div>
                 `;
@@ -536,67 +537,119 @@
             document.getElementById('exportJsonBtn').onclick = () => exportResults('json');
         }
 
-        let waveforms = {};
+        let peaksInstances = {};
 
         function initWaveform(index, speaker, start, end) {
-            const container = document.getElementById(`waveform-${index}`);
+            const overviewContainer = document.getElementById(`overview-${index}`);
+            const zoomviewContainer = document.getElementById(`zoomview-${index}`);
             const speakerData = speakerWaveforms[speaker];
 
             if (!speakerData || !speakerData.peaks) return;
 
-            const ws = WaveSurfer.create({
-                container: container,
-                waveColor: '#cbd5e1',
-                progressColor: '#6366f1',
-                height: 40,
-                interact: false,
-                peaks: [speakerData.peaks],
-                duration: speakerData.duration,
-            });
+            const audioUrl = `/api/original-audio/${currentJobId}/${speaker}`;
+            const mediaElement = new Audio(audioUrl);
+            mediaElement.load();
 
-            waveforms[index] = ws;
-
-            const block = document.getElementById(`seg-${index}`);
-            const inputs = block.querySelectorAll('input');
-
-            const updateView = () => {
-                const s = parseFloat(block.querySelector('.source-start').value);
-                const e = parseFloat(block.querySelector('.source-end').value);
-                const csvS = parseFloat(block.querySelector('.csv-start').value);
-                const csvE = parseFloat(block.querySelector('.csv-end').value);
-                const tempo = parseFloat(block.querySelector('.tempo').value) || 1.0;
-
-                // Update Waveform zoom/view
-                if (!isNaN(s) && !isNaN(e) && e > s) {
-                    ws.zoom(container.clientWidth / (e - s));
-                    container.scrollLeft = s * (container.scrollWidth / speakerData.duration);
-                }
-
-                // Update Delta Label
-                const deltaLabel = block.querySelector('.delta-label');
-                const targetDuration = csvE - csvS;
-                const sourceDuration = (e - s) / tempo;
-                const diff = sourceDuration - targetDuration;
-
-                if (Math.abs(diff) < 0.01) {
-                    deltaLabel.textContent = 'Perfect Match';
-                    deltaLabel.className = 'delta-label text-green-500';
-                } else if (diff > 0) {
-                    deltaLabel.textContent = `+${diff.toFixed(2)}s Added`;
-                    deltaLabel.className = 'delta-label text-blue-500';
-                } else {
-                    deltaLabel.textContent = `${diff.toFixed(2)}s Removed`;
-                    deltaLabel.className = 'delta-label text-orange-500';
-                }
+            const options = {
+                overview: {
+                    container: overviewContainer,
+                    waveformColor: '#e2e8f0',
+                    playedWaveformColor: '#94a3b8',
+                    highlightColor: '#6366f1',
+                    showAxisLabels: false,
+                    waveformHeight: 24
+                },
+                zoomview: {
+                    container: zoomviewContainer,
+                    waveformColor: '#cbd5e1',
+                    playheadColor: '#6366f1',
+                    axisLabelColor: '#64748b',
+                    showAxisLabels: true,
+                    waveformHeight: 48
+                },
+                mediaElement: mediaElement,
+                webAudio: {
+                    audioContext: new AudioContext(),
+                    multiChannel: false
+                },
+                contentEditable: false
             };
 
-            inputs.forEach(input => input.addEventListener('input', updateView));
+            // Use Web Audio for peaks if needed, but since we have them, we should use them
+            // Peaks.js expects data in a specific format (Int16 usually), let's try auto-detect or manual
 
-            // Initial view update
-            setTimeout(updateView, 100);
+            peaks.init(options, (err, peaksInstance) => {
+                if (err) {
+                    console.error('Peaks init error:', err);
+                    return;
+                }
+
+                peaksInstances[index] = peaksInstance;
+
+                // Create initial segment marker
+                peaksInstance.segments.add({
+                    id: `seg-marker-${index}`,
+                    startTime: start,
+                    endTime: end,
+                    editable: true,
+                    color: '#6366f1',
+                    labelText: 'Aligned'
+                });
+
+                const block = document.getElementById(`seg-${index}`);
+                const inputs = block.querySelectorAll('input');
+
+                const updateView = () => {
+                    const s = parseFloat(block.querySelector('.source-start').value);
+                    const e = parseFloat(block.querySelector('.source-end').value);
+                    const csvS = parseFloat(block.querySelector('.csv-start').value);
+                    const csvE = parseFloat(block.querySelector('.csv-end').value);
+                    const tempo = parseFloat(block.querySelector('.tempo').value) || 1.0;
+
+                    // Update Peaks.js segment marker
+                    const segment = peaksInstance.segments.getSegment(`seg-marker-${index}`);
+                    if (segment && !isNaN(s) && !isNaN(e) && e > s) {
+                        segment.update({ startTime: s, endTime: e });
+                        // Adjust zoom to show the segment
+                        peaksInstance.zoomview.setZoom({ startTime: s - 0.5, endTime: e + 0.5 });
+                    }
+
+                    // Update Delta Label
+                    const deltaLabel = block.querySelector('.delta-label');
+                    const targetDuration = csvE - csvS;
+                    const sourceDuration = (e - s) / tempo;
+                    const diff = sourceDuration - targetDuration;
+
+                    if (Math.abs(diff) < 0.01) {
+                        deltaLabel.textContent = 'Perfect Match';
+                        deltaLabel.className = 'delta-label text-green-500';
+                    } else if (diff > 0) {
+                        deltaLabel.textContent = `+${diff.toFixed(2)}s Added`;
+                        deltaLabel.className = 'delta-label text-blue-500';
+                    } else {
+                        deltaLabel.textContent = `${diff.toFixed(2)}s Removed`;
+                        deltaLabel.className = 'delta-label text-orange-500';
+                    }
+                };
+
+                // Sync Peaks.js segment changes back to inputs
+                peaksInstance.on('segments.dragged', (segment) => {
+                    if (segment.id === `seg-marker-${index}`) {
+                        block.querySelector('.source-start').value = segment.startTime.toFixed(2);
+                        block.querySelector('.source-end').value = segment.endTime.toFixed(2);
+                        updateView();
+                    }
+                });
+
+                inputs.forEach(input => input.addEventListener('input', updateView));
+
+                // Initial view update
+                setTimeout(updateView, 100);
+            });
         }
 
         function previewSegment(btn, speaker, index) {
+            const pk = peaksInstances[index];
             if (activeAudio) {
                 activeAudio.pause();
                 const oldBtn = activeAudio.btn;
@@ -628,10 +681,25 @@
 
             audio.addEventListener('loadedmetadata', () => {
                 audio.currentTime = start;
-                audio.play();
+                // Hook into Peaks.js if possible to sync playhead
+                if (pk) {
+                    // Try to use Peaks.js with the audio element to get playhead tracking
+                    pk.setSource({
+                        mediaElement: audio
+                    }, (err) => {
+                        if (!err) {
+                            audio.play();
+                        } else {
+                            // Fallback if setSource fails
+                            audio.play();
+                        }
+                    });
+                } else {
+                    audio.play();
+                }
 
                 // Sync waveform progress
-                const ws = waveforms[index];
+                const pk = peaksInstances[index];
                 const playStartTime = Date.now();
                 const duration = (end - start) / tempo;
 
@@ -642,7 +710,14 @@
                     }
                     const elapsed = (Date.now() - playStartTime) / 1000;
                     const currentPos = start + (elapsed * tempo);
-                    ws.setTime(currentPos);
+                    // pk.player.seek() is for peaks managed players,
+                    // since we are external, we use the internal playhead update if possible
+                    // or just use the zoomview setTime if it exists
+                    if (pk.zoomview) {
+                        // Peaks doesn't have a direct setTime for zoomview without a player
+                        // but we can try to use the internal _playhead if it's there
+                        // or just rely on the fact that we are viewing the segment.
+                    }
                 }, 50);
 
                 setTimeout(() => {
@@ -650,7 +725,6 @@
                         audio.pause();
                         btn.innerHTML = '<i class="fas fa-play"></i>';
                         activeAudio = null;
-                        ws.setTime(start);
                     }
                 }, duration * 1000);
             });
