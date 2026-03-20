@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Audio Force Alignment Tool</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/peaks.js/dist/peaks.js"></script>
+    <script src="https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
         @keyframes pulse {
@@ -158,43 +158,32 @@
             </div>
         </div>
 
-        <!-- Step 3: Timeline Editor -->
-        <div id="step3" class="hidden min-h-screen">
-            <div class="bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-100">
-                <div class="bg-gray-900 text-white p-6 flex items-center justify-between">
+        <!-- Step 3: Segment Editor -->
+        <div id="step3" class="hidden">
+            <div class="bg-white rounded-xl shadow-lg p-8">
+                <div class="flex items-center justify-between mb-6">
                     <div class="flex items-center">
-                        <div class="w-12 h-12 rounded-xl bg-indigo-500 flex items-center justify-center font-bold mr-4 shadow-lg">3</div>
-                        <div>
-                            <h2 class="text-2xl font-bold">Timeline Editor</h2>
-                            <p class="text-gray-400 text-sm">Fine-tune alignments and tempo</p>
-                        </div>
+                        <div class="w-10 h-10 rounded-full gradient-bg text-white flex items-center justify-center font-bold mr-4">3</div>
+                        <h2 class="text-2xl font-semibold">Review and Adjust Segments</h2>
                     </div>
-                    <div class="flex space-x-3">
-                        <button class="bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded-lg transition-all flex items-center border border-gray-700" id="exportCsvBtn">
-                            <i class="fas fa-file-csv mr-2"></i>Export CSV
+                    <div class="flex space-x-2">
+                        <button class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors text-sm" id="exportCsvBtn">
+                            <i class="fas fa-file-csv mr-2"></i>CSV
                         </button>
-                        <button class="bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded-lg transition-all flex items-center border border-gray-700" id="exportJsonBtn">
-                            <i class="fas fa-file-code mr-2"></i>Export JSON
-                        </button>
-                        <button class="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2 rounded-lg transition-all font-bold shadow-lg" id="generateFinalBtn">
-                            <i class="fas fa-rocket mr-2"></i>Generate Tracks
+                        <button class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm" id="exportJsonBtn">
+                            <i class="fas fa-file-code mr-2"></i>JSON
                         </button>
                     </div>
                 </div>
 
-                <!-- Batch Controls -->
-                <div class="bg-gray-50 border-b border-gray-200 px-6 py-4 flex items-center space-x-4">
-                    <span class="text-xs font-bold text-gray-400 uppercase tracking-widest">Batch Adjust:</span>
-                    <button onclick="batchAdjust('start', -0.5)" class="bg-white border border-gray-200 hover:border-indigo-500 text-gray-700 px-4 py-1.5 rounded-lg text-sm font-medium transition-all shadow-sm">
-                        <i class="fas fa-step-backward mr-2 text-indigo-500"></i>Add 0.5s to all Starts
-                    </button>
-                    <button onclick="batchAdjust('end', 0.5)" class="bg-white border border-gray-200 hover:border-indigo-500 text-gray-700 px-4 py-1.5 rounded-lg text-sm font-medium transition-all shadow-sm">
-                        <i class="fas fa-step-forward mr-2 text-indigo-500"></i>Add 0.5s to all Ends
-                    </button>
-                </div>
-
-                <div id="segmentList" class="divide-y divide-gray-100 bg-gray-50">
+                <div id="segmentList" class="space-y-6">
                     <!-- Segment blocks will be added dynamically -->
+                </div>
+
+                <div class="mt-8 border-t pt-6">
+                    <button class="w-full bg-indigo-600 text-white py-4 rounded-xl font-bold text-lg shadow-lg hover:bg-indigo-700 transition-all transform hover:-translate-y-1" id="generateFinalBtn">
+                        <i class="fas fa-magic mr-2"></i>Generate Final Tracks
+                    </button>
                 </div>
             </div>
         </div>
@@ -273,8 +262,7 @@
         let currentJobId = null;
         let jobAlignmentResults = null;
         let activeAudio = null;
-        let speakerDataCache = {};
-        let peaksInstances = {};
+        let speakerWaveforms = {}; // Cache for speaker waveform peaks
 
         // Initialize
         loadSystemInfo();
@@ -481,90 +469,61 @@
             const list = document.getElementById('segmentList');
             list.innerHTML = '';
 
+            // Prefetch waveforms for all unique speakers in parallel
             const speakers = [...new Set(results.map(s => s.speaker))];
-            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-
             await Promise.all(speakers.map(async (speaker) => {
-                if (!speakerDataCache[speaker]) {
+                if (!speakerWaveforms[speaker]) {
                     try {
-                        const [waveformResp, audioUrl] = await Promise.all([
-                            fetch(`/api/waveform-data/${currentJobId}/${speaker}`).then(r => r.json()),
-                            `/api/original-audio/${currentJobId}/${speaker}`
-                        ]);
-                        const audio = new Audio(audioUrl);
-                        audio.preload = 'auto';
-                        speakerDataCache[speaker] = {
-                            peaks: waveformResp.peaks,
-                            audioUrl: audioUrl,
-                            sharedAudio: audio,
-                            audioContext: audioCtx
-                        };
+                        const resp = await fetch(`/api/waveform-data/${currentJobId}/${speaker}`);
+                        speakerWaveforms[speaker] = await resp.json();
                     } catch (e) {
-                        console.error(`Failed to load data for ${speaker}:`, e);
+                        console.error(`Failed to load waveform for ${speaker}:`, e);
                     }
                 }
             }));
 
             results.forEach((seg, index) => {
+                const confidenceClass = seg.confidence > 0.7 ? 'border-green-500' :
+                                       seg.confidence > 0.4 ? 'border-yellow-500' :
+                                       'border-red-500';
+                
                 const block = document.createElement('div');
-                block.className = `p-6 bg-white hover:bg-indigo-50/30 transition-colors group relative`;
+                block.className = `bg-white rounded-xl shadow border-l-4 ${confidenceClass} overflow-hidden`;
                 block.id = `seg-${index}`;
-
-                const confidenceColor = seg.confidence > 0.7 ? 'text-green-600' :
-                                      seg.confidence > 0.4 ? 'text-yellow-600' : 'text-red-600';
-
                 block.innerHTML = `
-                    <div class="flex flex-col lg:flex-row lg:items-center gap-6">
-                        <div class="w-full lg:w-72 flex-shrink-0">
-                            <div class="flex items-center justify-between mb-2">
-                                <span class="px-2 py-1 bg-indigo-100 text-indigo-700 rounded text-xs font-bold uppercase tracking-wider">${seg.speaker}</span>
-                                <div class="flex items-center ${confidenceColor} text-[10px] font-bold">
-                                    <i class="fas fa-circle mr-1 text-[6px]"></i>
-                                    ${Math.round(seg.confidence * 100)}% Match
-                                </div>
-                            </div>
-                            <p class="text-gray-800 font-medium text-sm leading-relaxed line-clamp-2 mb-3" title="${seg.text_ro}">
-                                ${seg.text_ro}
-                            </p>
-                            <div class="flex items-center space-x-2">
-                                <button onclick="previewSegment(this, '${seg.speaker}', ${index})" class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center shadow-md shadow-indigo-100">
-                                    <i class="fas fa-play mr-2"></i> Preview
-                                </button>
-                                <div class="flex items-center bg-gray-100 px-3 py-2 rounded-lg">
-                                    <span class="text-[10px] font-bold text-gray-400 mr-2 uppercase">Tempo</span>
-                                    <input type="number" step="0.01" min="0.5" max="2.0" class="w-12 bg-transparent border-none focus:ring-0 text-sm font-bold text-gray-700 p-0 tempo" value="1.00">
-                                    <span class="text-xs text-gray-400 font-bold ml-1">x</span>
-                                </div>
-                            </div>
+                    <div class="p-4 bg-gray-50 flex items-center justify-between border-b">
+                        <div class="flex items-center space-x-4">
+                            <span class="font-bold text-indigo-900">${seg.speaker}</span>
+                            <span class="text-sm text-gray-600 italic truncate max-w-md" title="${seg.text_ro}">${seg.text_ro}</span>
                         </div>
-
-                        <div class="flex-1 min-w-0">
-                            <div class="grid grid-cols-2 gap-4 mb-4">
-                                <div class="bg-gray-50 p-3 rounded-xl border border-gray-100">
-                                    <div class="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Metadata Timing (CSV)</div>
-                                    <div class="flex items-center space-x-3">
-                                        <input type="number" step="0.01" class="w-full bg-white border border-gray-200 rounded-lg px-2 py-1.5 text-sm font-mono csv-start" value="${seg.csv_start}">
-                                        <span class="text-gray-300">→</span>
-                                        <input type="number" step="0.01" class="w-full bg-white border border-gray-200 rounded-lg px-2 py-1.5 text-sm font-mono csv-end" value="${seg.csv_end}">
-                                    </div>
-                                </div>
-                                <div class="bg-white p-3 rounded-xl border border-indigo-100 shadow-sm shadow-indigo-50">
-                                    <div class="flex items-center justify-between mb-2">
-                                        <div class="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Source Audio Timing</div>
-                                        <span class="delta-label text-[10px] font-black uppercase bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full"></span>
-                                    </div>
-                                    <div class="flex items-center space-x-3">
-                                        <input type="number" step="0.01" class="w-full bg-indigo-50/30 border border-indigo-100 rounded-lg px-2 py-1.5 text-sm font-mono text-indigo-700 source-start" value="${seg.source_start}">
-                                        <span class="text-indigo-200">→</span>
-                                        <input type="number" step="0.01" class="w-full bg-indigo-50/30 border border-indigo-100 rounded-lg px-2 py-1.5 text-sm font-mono text-indigo-700 source-end" value="${seg.source_end}">
-                                    </div>
-                                </div>
+                        <div class="flex items-center space-x-6 text-sm">
+                            <div class="flex space-x-2">
+                                <label class="text-gray-500">CSV:</label>
+                                <input type="number" step="0.01" class="w-16 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center csv-start" value="${seg.csv_start}">
+                                <span>-</span>
+                                <input type="number" step="0.01" class="w-16 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center csv-end" value="${seg.csv_end}">
                             </div>
-
-                            <div class="bg-white rounded-xl border border-gray-100 overflow-hidden shadow-inner relative">
-                                <div id="overview-${index}" class="w-full h-8 border-b border-gray-50"></div>
-                                <div id="zoomview-${index}" class="w-full h-12"></div>
+                            <div class="flex space-x-2">
+                                <label class="text-gray-500">Source:</label>
+                                <input type="number" step="0.01" class="w-16 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center source-start" value="${seg.source_start}">
+                                <span>-</span>
+                                <input type="number" step="0.01" class="w-16 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center source-end" value="${seg.source_end}">
                             </div>
+                            <div class="flex space-x-2 items-center">
+                                <label class="text-gray-500">Tempo:</label>
+                                <input type="number" step="0.01" min="0.5" max="2.0" class="w-14 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center tempo" value="1.00">
+                                <span class="text-xs text-gray-400">x</span>
+                            </div>
+                            <button onclick="previewSegment(this, '${seg.speaker}', ${index})" class="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 hover:bg-indigo-600 hover:text-white transition-colors">
+                                <i class="fas fa-play"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="p-2 relative bg-gray-50/50">
+                        <div id="waveform-${index}" class="w-full h-10"></div>
+                        <div class="absolute bottom-1 right-2 flex space-x-4 text-[11px] font-bold uppercase tracking-wider">
+                           <span class="text-gray-400">Confidence: ${Math.round(seg.confidence * 100)}%</span>
+                           <span class="delta-label"></span>
                         </div>
                     </div>
                 `;
@@ -572,88 +531,134 @@
                 initWaveform(index, seg.speaker, seg.source_start, seg.source_end);
             });
 
+            // Export functionality
             document.getElementById('exportCsvBtn').onclick = () => exportResults('csv');
             document.getElementById('exportJsonBtn').onclick = () => exportResults('json');
         }
 
-        function initWaveform(index, speaker, start, end) {
-            const overviewContainer = document.getElementById(`overview-${index}`);
-            const zoomviewContainer = document.getElementById(`zoomview-${index}`);
-            const data = speakerDataCache[speaker];
-            if (!data || !data.peaks) return;
+        let waveforms = {};
 
-            const options = {
-                overview: { container: overviewContainer, waveformColor: '#f1f5f9', playedWaveformColor: '#cbd5e1', highlightColor: '#818cf8', showAxisLabels: false, waveformHeight: 32 },
-                zoomview: { container: zoomviewContainer, waveformColor: '#e0e7ff', playheadColor: '#4f46e5', axisLabelColor: '#94a3b8', showAxisLabels: true, waveformHeight: 48 },
-                mediaElement: data.sharedAudio,
-                data: { peaks: data.peaks },
-                webAudio: { audioContext: data.audioContext, multiChannel: false },
-                contentEditable: false
+        function initWaveform(index, speaker, start, end) {
+            const container = document.getElementById(`waveform-${index}`);
+            const speakerData = speakerWaveforms[speaker];
+
+            if (!speakerData || !speakerData.peaks) return;
+
+            const ws = WaveSurfer.create({
+                container: container,
+                waveColor: '#cbd5e1',
+                progressColor: '#6366f1',
+                height: 40,
+                interact: false,
+                peaks: [speakerData.peaks],
+                duration: speakerData.duration,
+            });
+
+            waveforms[index] = ws;
+
+            const block = document.getElementById(`seg-${index}`);
+            const inputs = block.querySelectorAll('input');
+
+            const updateView = () => {
+                const s = parseFloat(block.querySelector('.source-start').value);
+                const e = parseFloat(block.querySelector('.source-end').value);
+                const csvS = parseFloat(block.querySelector('.csv-start').value);
+                const csvE = parseFloat(block.querySelector('.csv-end').value);
+                const tempo = parseFloat(block.querySelector('.tempo').value) || 1.0;
+
+                // Update Waveform zoom/view
+                if (!isNaN(s) && !isNaN(e) && e > s) {
+                    ws.zoom(container.clientWidth / (e - s));
+                    container.scrollLeft = s * (container.scrollWidth / speakerData.duration);
+                }
+
+                // Update Delta Label
+                const deltaLabel = block.querySelector('.delta-label');
+                const targetDuration = csvE - csvS;
+                const sourceDuration = (e - s) / tempo;
+                const diff = sourceDuration - targetDuration;
+
+                if (Math.abs(diff) < 0.01) {
+                    deltaLabel.textContent = 'Perfect Match';
+                    deltaLabel.className = 'delta-label text-green-500';
+                } else if (diff > 0) {
+                    deltaLabel.textContent = `+${diff.toFixed(2)}s Added`;
+                    deltaLabel.className = 'delta-label text-blue-500';
+                } else {
+                    deltaLabel.textContent = `${diff.toFixed(2)}s Removed`;
+                    deltaLabel.className = 'delta-label text-orange-500';
+                }
             };
 
-            peaks.init(options, (err, peaksInstance) => {
-                if (err) { console.error('Peaks init error:', err); return; }
-                peaksInstances[index] = peaksInstance;
-                peaksInstance.segments.add({ id: `seg-marker-${index}`, startTime: start, endTime: end, editable: true, color: '#6366f1', labelText: 'Aligned' });
-                const block = document.getElementById(`seg-${index}`);
-                const inputs = block.querySelectorAll('input');
-                const updateView = () => {
-                    const s = parseFloat(block.querySelector('.source-start').value), e = parseFloat(block.querySelector('.source-end').value);
-                    const csvS = parseFloat(block.querySelector('.csv-start').value), csvE = parseFloat(block.querySelector('.csv-end').value);
-                    const tempo = parseFloat(block.querySelector('.tempo').value) || 1.0;
-                    const segment = peaksInstance.segments.getSegment(`seg-marker-${index}`);
-                    if (segment && !isNaN(s) && !isNaN(e) && e > s) segment.update({ startTime: s, endTime: e });
-                    const deltaLabel = block.querySelector('.delta-label');
-                    const targetDuration = csvE - csvS, sourceDuration = (e - s) / tempo, diff = sourceDuration - targetDuration;
-                    if (Math.abs(diff) < 0.01) { deltaLabel.textContent = 'Perfect Match'; deltaLabel.className = 'delta-label text-green-500 text-[10px] font-black uppercase bg-green-50 px-2 py-0.5 rounded-full'; }
-                    else if (diff > 0) { deltaLabel.textContent = `+${diff.toFixed(2)}s Added`; deltaLabel.className = 'delta-label text-blue-500 text-[10px] font-black uppercase bg-blue-50 px-2 py-0.5 rounded-full'; }
-                    else { deltaLabel.textContent = `${diff.toFixed(2)}s Removed`; deltaLabel.className = 'delta-label text-orange-500 text-[10px] font-black uppercase bg-orange-50 px-2 py-0.5 rounded-full'; }
-                };
-                peaksInstance.on('segments.dragged', (segment) => {
-                    if (segment.id === `seg-marker-${index}`) {
-                        block.querySelector('.source-start').value = segment.startTime.toFixed(2);
-                        block.querySelector('.source-end').value = segment.endTime.toFixed(2);
-                        updateView();
-                    }
-                });
-                inputs.forEach(input => input.addEventListener('input', updateView));
-                setTimeout(updateView, 100);
-            });
-        }
+            inputs.forEach(input => input.addEventListener('input', updateView));
 
-        function batchAdjust(field, delta) {
-            const selector = field === 'start' ? '.source-start' : '.source-end';
-            document.querySelectorAll(selector).forEach(input => {
-                const newVal = Math.max(0, parseFloat(input.value) + delta);
-                input.value = newVal.toFixed(2);
-                input.dispatchEvent(new Event('input'));
-            });
-            showToast(`Adjusted all ${field}s by ${delta}s`, 'success');
+            // Initial view update
+            setTimeout(updateView, 100);
         }
 
         function previewSegment(btn, speaker, index) {
-            const data = speakerDataCache[speaker];
-            const audio = data.sharedAudio;
             if (activeAudio) {
                 activeAudio.pause();
                 const oldBtn = activeAudio.btn;
-                if (oldBtn) oldBtn.innerHTML = '<i class="fas fa-play mr-2"></i> Preview';
-                if (activeAudio === audio && activeAudio.segmentIndex === index) { activeAudio = null; return; }
-            }
-            const block = document.getElementById(`seg-${index}`);
-            const start = parseFloat(block.querySelector('.source-start').value), end = parseFloat(block.querySelector('.source-end').value);
-            const tempo = parseFloat(block.querySelector('.tempo').value) || 1.0;
-            if (isNaN(start) || isNaN(end) || start >= end) { showToast('Invalid start/end times', 'error'); return; }
-            audio.playbackRate = tempo; audio.currentTime = start; audio.segmentIndex = index; activeAudio = audio; audio.btn = btn; btn.innerHTML = '<i class="fas fa-stop mr-2"></i> Stop';
-            audio.play().catch(e => { showToast('Playback error: ' + e.message, 'error'); btn.innerHTML = '<i class="fas fa-play mr-2"></i> Preview'; });
-            const checkEnd = () => {
-                if (audio.currentTime >= end || audio.paused || activeAudio !== audio || audio.segmentIndex !== index) {
-                    audio.pause(); btn.innerHTML = '<i class="fas fa-play mr-2"></i> Preview';
-                    if (activeAudio === audio && audio.segmentIndex === index) activeAudio = null;
-                    audio.removeEventListener('timeupdate', checkEnd);
+                if (oldBtn) oldBtn.innerHTML = '<i class="fas fa-play"></i>';
+
+                if (activeAudio === btn.audio) {
+                    activeAudio = null;
+                    return;
                 }
-            };
-            audio.addEventListener('timeupdate', checkEnd);
+            }
+
+            const block = document.getElementById(`seg-${index}`);
+            const start = parseFloat(block.querySelector('.source-start').value);
+            const end = parseFloat(block.querySelector('.source-end').value);
+            const tempo = parseFloat(block.querySelector('.tempo').value) || 1.0;
+
+            if (isNaN(start) || isNaN(end) || start >= end) {
+                showToast('Invalid start/end times', 'error');
+                return;
+            }
+
+            const url = `/api/original-audio/${currentJobId}/${speaker}`;
+            const audio = new Audio(url);
+            audio.playbackRate = tempo;
+            activeAudio = audio;
+            audio.btn = btn;
+            btn.audio = audio;
+            btn.innerHTML = '<i class="fas fa-stop"></i>';
+
+            audio.addEventListener('loadedmetadata', () => {
+                audio.currentTime = start;
+                audio.play();
+
+                // Sync waveform progress
+                const ws = waveforms[index];
+                const playStartTime = Date.now();
+                const duration = (end - start) / tempo;
+
+                const progressInterval = setInterval(() => {
+                    if (activeAudio !== audio || audio.paused) {
+                        clearInterval(progressInterval);
+                        return;
+                    }
+                    const elapsed = (Date.now() - playStartTime) / 1000;
+                    const currentPos = start + (elapsed * tempo);
+                    ws.setTime(currentPos);
+                }, 50);
+
+                setTimeout(() => {
+                    if (activeAudio === audio) {
+                        audio.pause();
+                        btn.innerHTML = '<i class="fas fa-play"></i>';
+                        activeAudio = null;
+                        ws.setTime(start);
+                    }
+                }, duration * 1000);
+            });
+
+            audio.addEventListener('ended', () => {
+                btn.innerHTML = '<i class="fas fa-play"></i>';
+                activeAudio = null;
+            });
         }
 
         function exportResults(format) {
@@ -677,7 +682,7 @@
 
             let content, filename, mime;
             if (format === 'csv') {
-                const headers = ['speaker', 'text_ro', 'text_en', 'csv_start', 'csv_end', 'source_start', 'source_end', 'confidence'];
+                const headers = ['speaker', 'text_ro', 'text_en', 'csv_start', 'csv_end', 'source_start', 'source_end', 'tempo', 'confidence'];
                 const csv = [headers.join(',')];
                 data.forEach(row => {
                     csv.push(headers.map(h => row[h]).join(','));

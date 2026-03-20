@@ -412,12 +412,13 @@ def generate_final():
             # Extract segments
             for seg in speaker_segs:
                 try:
+                    tempo = float(seg.get('tempo', 1.0))
                     extracted = audio_processor.extract_segment(
                         audio, sr,
                         float(seg['source_start']),
                         float(seg['source_end']),
                         seg.get('text_ro', ''),
-                        float(seg.get('tempo', 1.0))
+                        tempo=tempo
                     )
 
                     aligned_for_reconstruction.append((
@@ -499,6 +500,21 @@ def preview_file(filename):
         mimetype='audio/wav'
     )
 
+@app.route('/api/original-audio/<job_id>/<speaker>')
+def get_original_audio(job_id, speaker):
+    """Get original uploaded audio for preview"""
+    with jobs_lock:
+        job = JOBS.get(job_id)
+        if not job:
+            return jsonify({'error': 'Job not found'}), 404
+        
+        # Find audio file for speaker
+        for file_info in job.get('files', []):
+            if speaker in file_info.get('path', ''):
+                return send_file(file_info['path'], mimetype='audio/wav')
+        
+        return jsonify({'error': 'Speaker audio not found'}), 404
+
 @app.route('/api/waveform-data/<job_id>/<speaker>')
 def get_waveform_data(job_id, speaker):
     """Get downsampled waveform peaks for visualization"""
@@ -524,18 +540,13 @@ def get_waveform_data(job_id, speaker):
         if target_points > 10000: target_points = 10000
 
         if len(audio) > target_points:
-            # Min/Max pooling for peaks (Standard format for waveform libraries)
+            # Simple max-pooling for peaks
             win_size = len(audio) // target_points
             peaks = []
             for i in range(0, len(audio) - win_size, win_size):
-                window = audio[i:i+win_size]
-                peaks.append(float(np.min(window)))
-                peaks.append(float(np.max(window)))
+                peaks.append(float(np.max(np.abs(audio[i:i+win_size]))))
         else:
-            peaks = []
-            for x in audio:
-                peaks.append(float(x))
-                peaks.append(float(x))
+            peaks = [float(x) for x in audio]
 
         return jsonify({
             'peaks': peaks,
@@ -545,21 +556,6 @@ def get_waveform_data(job_id, speaker):
     except Exception as e:
         logger.error(f"Waveform data error: {e}")
         return jsonify({'error': str(e)}), 500
-
-@app.route('/api/original-audio/<job_id>/<speaker>')
-def get_original_audio(job_id, speaker):
-    """Get original uploaded audio for preview"""
-    with jobs_lock:
-        job = JOBS.get(job_id)
-        if not job:
-            return jsonify({'error': 'Job not found'}), 404
-
-        # Find audio file for speaker
-        for file_info in job.get('files', []):
-            if speaker in file_info.get('path', ''):
-                return send_file(file_info['path'], mimetype='audio/wav')
-
-        return jsonify({'error': 'Speaker audio not found'}), 404
 
 @app.route('/api/job/<job_id>')
 def job_status(job_id):
