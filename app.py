@@ -153,14 +153,16 @@ def background_alignment(job_id, segments, speakers_to_process, audio_files_info
                 raise Exception("Failed to initialize MMS aligner")
 
         all_alignments = []
-        total_steps = len(speakers_to_process)
         total_duration = max(s['end'] for s in segments) if segments else 0
 
-        for idx, speaker in enumerate(speakers_to_process):
-            # Update progress
+        # Calculate total segments to process for better progress bar
+        total_segments_to_process = sum(1 for s in segments if s['speaker'] in speakers_to_process)
+        processed_segments_count = 0
+
+        for speaker in speakers_to_process:
+            # Update status
             with jobs_lock:
                 if job_id in JOBS:
-                    JOBS[job_id]['progress'] = int((idx / total_steps) * 100)
                     JOBS[job_id]['status'] = f'🎯 Aligning {speaker}...'
 
             audio_info = audio_files_info.get(speaker)
@@ -173,6 +175,9 @@ def background_alignment(job_id, segments, speakers_to_process, audio_files_info
             # Filter segments for this character
             char_segments = [s for s in segments if s['speaker'] == speaker]
 
+            # Identify first 10% of segments for hump-based refinement
+            num_refinement_segments = max(1, len(char_segments) // 10)
+
             if aligner:
                 # Use aligner to find where the dialogue actually is
                 try:
@@ -184,6 +189,30 @@ def background_alignment(job_id, segments, speakers_to_process, audio_files_info
                 except Exception as e:
                     logger.error(f"Alignment failed for {speaker}: {e}")
                     alignments = [{'original': seg, 'aligned': None} for seg in char_segments]
+
+                # Post-process for first 10% refinement
+                try:
+                    # Reuse audio if already loaded for extraction (efficiency)
+                    audio_full, sr_full = audio_processor.load_audio(audio_path)
+                    onsets = audio_processor.detect_onsets(audio_full, sr_full)
+
+                    if onsets is not None and len(onsets) > 0:
+                        for idx_align, entry in enumerate(alignments[:num_refinement_segments]):
+                            aligned = entry.get('aligned')
+                            if aligned:
+                                # Find first onset after Whisper's suggested start
+                                current_start = aligned['start']
+                                closest_onset = None
+
+                                for onset in onsets:
+                                    if abs(onset - current_start) < 0.5: # 500ms window
+                                        closest_onset = onset
+                                        break
+
+                                if closest_onset is not None:
+                                    aligned['start'] = closest_onset
+                except Exception as e:
+                    logger.error(f"Hump-refinement failed for {speaker}: {e}")
 
                 for entry in alignments:
                     orig = entry['original']
@@ -210,6 +239,12 @@ def background_alignment(job_id, segments, speakers_to_process, audio_files_info
                         })
                     
                     all_alignments.append(alignment_info)
+
+                    # Update progress per segment
+                    processed_segments_count += 1
+                    with jobs_lock:
+                        if job_id in JOBS:
+                            JOBS[job_id]['progress'] = int((processed_segments_count / total_segments_to_process) * 100)
             else:
                 # No alignment, just map CSV timing to audio source starting at 0
                 for orig in char_segments:
@@ -224,6 +259,11 @@ def background_alignment(job_id, segments, speakers_to_process, audio_files_info
                         'source_end': orig['end'] - orig['start'],
                         'confidence': 1.0
                     })
+                    # Update progress per segment
+                    processed_segments_count += 1
+                    with jobs_lock:
+                        if job_id in JOBS:
+                            JOBS[job_id]['progress'] = int((processed_segments_count / total_segments_to_process) * 100)
 
         with jobs_lock:
             if job_id in JOBS:

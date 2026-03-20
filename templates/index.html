@@ -562,6 +562,10 @@
 
             waveforms[index] = ws;
 
+            ws.on('ready', () => {
+                updateView();
+            });
+
             const block = document.getElementById(`seg-${index}`);
             const inputs = block.querySelectorAll('input');
 

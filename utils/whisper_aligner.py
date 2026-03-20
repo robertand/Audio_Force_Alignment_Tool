@@ -38,12 +38,16 @@ class DialogueAligner:
                 audio = torch.from_numpy(audio).to(self.device)
 
             # Transcribe with word timestamps
+            # Use specific decoding parameters to improve sensitivity, especially for Romanian
             result = self.model.transcribe(
                 audio, 
                 language=language, 
                 word_timestamps=use_word_timestamps,
                 initial_prompt=initial_prompt,
-                beam_size=5 if self.device == "cuda" else 1  # Better quality on GPU
+                beam_size=5 if self.device == "cuda" else 1,  # Better quality on GPU
+                no_speech_threshold=0.3,
+                logprob_threshold=-1.0,
+                condition_on_previous_text=False
             )
             
             transcribed_segments = result.get('segments', [])
