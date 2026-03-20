@@ -54,13 +54,6 @@ audio_processor = AudioProcessor()
 vad_processor = VADProcessor()
 alignment_utils = AlignmentUtils()
 
-try:
-    from utils.ctc_aligner import CTCAligner
-    ctc_aligner = CTCAligner(device=device)
-except ImportError:
-    ctc_aligner = None
-    logger.warning("CTCAligner not available")
-
 # Job management with metadata
 JOBS = {}
 jobs_lock = threading.Lock()
@@ -146,14 +139,18 @@ cleanup_thread.start()
 logger.info("Cleanup thread started")
 
 def background_alignment(job_id, segments, speakers_to_process, audio_files_info, 
-                        use_whisper, model_name, initial_prompt, use_mms=False, use_ctc=False):
+                        use_whisper, model_name, initial_prompt, use_mms=False):
     """Background task for alignment processing"""
     try:
         aligner = None
         if use_whisper:
             aligner = get_whisper_aligner(model_name)
+            if aligner is None:
+                raise Exception("Failed to initialize Whisper aligner")
         elif use_mms:
             aligner = get_mms_aligner()
+            if aligner is None:
+                raise Exception("Failed to initialize MMS aligner")
 
         all_alignments = []
         total_steps = len(speakers_to_process)
@@ -176,41 +173,7 @@ def background_alignment(job_id, segments, speakers_to_process, audio_files_info
             # Filter segments for this character
             char_segments = [s for s in segments if s['speaker'] == speaker]
 
-            if use_ctc and ctc_aligner:
-                # Use the new CTC Forced Aligner
-                try:
-                    text_list = [s.get('text_ro', '') for s in char_segments]
-                    results = ctc_aligner.align(audio_path, text_list, language="ro")
-
-                    for i, res in enumerate(results):
-                        orig = char_segments[i]
-                        all_alignments.append({
-                            'speaker': speaker,
-                            'text_ro': orig.get('text_ro', ''),
-                            'text_en': orig.get('text_en', ''),
-                            'csv_start': orig['start'],
-                            'csv_end': orig['end'],
-                            'original_audio_filename': audio_info['filename'],
-                            'source_start': res['start'],
-                            'source_end': res['end'],
-                            'confidence': res.get('score', 1.0)
-                        })
-                except Exception as e:
-                    logger.error(f"CTC Alignment failed for {speaker}: {e}")
-                    # Fallback to direct mapping
-                    for orig in char_segments:
-                        all_alignments.append({
-                            'speaker': speaker,
-                            'text_ro': orig.get('text_ro', ''),
-                            'text_en': orig.get('text_en', ''),
-                            'csv_start': orig['start'],
-                            'csv_end': orig['end'],
-                            'original_audio_filename': audio_info['filename'],
-                            'source_start': 0,
-                            'source_end': orig['end'] - orig['start'],
-                            'confidence': 0.0
-                        })
-            elif aligner:
+            if aligner:
                 # Use aligner to find where the dialogue actually is
                 try:
                     alignments = aligner.align_character_audio(
@@ -313,7 +276,6 @@ def process_audio():
         segments = json.loads(request.form.get('segments', '[]'))
         use_whisper = request.form.get('use_whisper') == 'true'
         use_mms = request.form.get('use_mms') == 'true'
-        use_ctc = request.form.get('use_ctc') == 'true'
         speakers_to_process = request.form.getlist('speakers')
         model_name = request.form.get('whisper_model', 'base')
         initial_prompt = request.form.get('initial_prompt', '')
@@ -380,7 +342,7 @@ def process_audio():
         thread = threading.Thread(
             target=background_alignment,
             args=(job_id, segments, speakers_to_process, audio_files_info, 
-                  use_whisper, model_name, initial_prompt, use_mms, use_ctc)
+                  use_whisper, model_name, initial_prompt, use_mms)
         )
         thread.daemon = True
         thread.start()
@@ -450,13 +412,12 @@ def generate_final():
             # Extract segments
             for seg in speaker_segs:
                 try:
-                    tempo = float(seg.get('tempo', 1.0))
                     extracted = audio_processor.extract_segment(
                         audio, sr,
                         float(seg['source_start']),
                         float(seg['source_end']),
                         seg.get('text_ro', ''),
-                        tempo=tempo
+                        float(seg.get('tempo', 1.0))
                     )
 
                     aligned_for_reconstruction.append((
@@ -538,21 +499,6 @@ def preview_file(filename):
         mimetype='audio/wav'
     )
 
-@app.route('/api/original-audio/<job_id>/<speaker>')
-def get_original_audio(job_id, speaker):
-    """Get original uploaded audio for preview"""
-    with jobs_lock:
-        job = JOBS.get(job_id)
-        if not job:
-            return jsonify({'error': 'Job not found'}), 404
-        
-        # Find audio file for speaker
-        for file_info in job.get('files', []):
-            if speaker in file_info.get('path', ''):
-                return send_file(file_info['path'], mimetype='audio/wav')
-        
-        return jsonify({'error': 'Speaker audio not found'}), 404
-
 @app.route('/api/waveform-data/<job_id>/<speaker>')
 def get_waveform_data(job_id, speaker):
     """Get downsampled waveform peaks for visualization"""
@@ -599,6 +545,21 @@ def get_waveform_data(job_id, speaker):
     except Exception as e:
         logger.error(f"Waveform data error: {e}")
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/original-audio/<job_id>/<speaker>')
+def get_original_audio(job_id, speaker):
+    """Get original uploaded audio for preview"""
+    with jobs_lock:
+        job = JOBS.get(job_id)
+        if not job:
+            return jsonify({'error': 'Job not found'}), 404
+
+        # Find audio file for speaker
+        for file_info in job.get('files', []):
+            if speaker in file_info.get('path', ''):
+                return send_file(file_info['path'], mimetype='audio/wav')
+
+        return jsonify({'error': 'Speaker audio not found'}), 404
 
 @app.route('/api/job/<job_id>')
 def job_status(job_id):

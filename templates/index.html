@@ -115,10 +115,6 @@
                                         <span>MMS (Fast, good for Romanian)</span>
                                     </label>
                                     <label class="flex items-center">
-                                        <input type="radio" name="aligner" value="ctc" class="mr-2">
-                                        <span>CTC Forced Aligner (Optimized for Eleven Labs)</span>
-                                    </label>
-                                    <label class="flex items-center">
                                         <input type="radio" name="aligner" value="none" class="mr-2">
                                         <span>No alignment (direct mapping)</span>
                                     </label>
@@ -162,7 +158,7 @@
             </div>
         </div>
 
-        <!-- Step 3: Segment Editor -->
+        <!-- Step 3: Timeline Editor -->
         <div id="step3" class="hidden min-h-screen">
             <div class="bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-100">
                 <div class="bg-gray-900 text-white p-6 flex items-center justify-between">
@@ -184,6 +180,17 @@
                             <i class="fas fa-rocket mr-2"></i>Generate Tracks
                         </button>
                     </div>
+                </div>
+
+                <!-- Batch Controls -->
+                <div class="bg-gray-50 border-b border-gray-200 px-6 py-4 flex items-center space-x-4">
+                    <span class="text-xs font-bold text-gray-400 uppercase tracking-widest">Batch Adjust:</span>
+                    <button onclick="batchAdjust('start', -0.5)" class="bg-white border border-gray-200 hover:border-indigo-500 text-gray-700 px-4 py-1.5 rounded-lg text-sm font-medium transition-all shadow-sm">
+                        <i class="fas fa-step-backward mr-2 text-indigo-500"></i>Add 0.5s to all Starts
+                    </button>
+                    <button onclick="batchAdjust('end', 0.5)" class="bg-white border border-gray-200 hover:border-indigo-500 text-gray-700 px-4 py-1.5 rounded-lg text-sm font-medium transition-all shadow-sm">
+                        <i class="fas fa-step-forward mr-2 text-indigo-500"></i>Add 0.5s to all Ends
+                    </button>
                 </div>
 
                 <div id="segmentList" class="divide-y divide-gray-100 bg-gray-50">
@@ -266,7 +273,8 @@
         let currentJobId = null;
         let jobAlignmentResults = null;
         let activeAudio = null;
-        let speakerDataCache = {}; // Cache for speaker waveform peaks, audio buffers, etc.
+        let speakerDataCache = {};
+        let peaksInstances = {};
 
         // Initialize
         loadSystemInfo();
@@ -389,7 +397,6 @@
             formData.append('segments', JSON.stringify(currentMetadata.segments));
             formData.append('use_whisper', aligner === 'whisper');
             formData.append('use_mms', aligner === 'mms');
-            formData.append('use_ctc', aligner === 'ctc');
             formData.append('whisper_model', document.getElementById('whisperModel').value);
             formData.append('initial_prompt', document.getElementById('initialPrompt').value);
 
@@ -467,14 +474,13 @@
             poll();
         }
 
-        async function showStep3(results) {
+        function showStep3(results) {
             document.getElementById('step2').classList.add('hidden');
             document.getElementById('step3').classList.remove('hidden');
             
             const list = document.getElementById('segmentList');
             list.innerHTML = '';
 
-            // Prefetch waveforms and audio metadata for all unique speakers in parallel
             const speakers = [...new Set(results.map(s => s.speaker))];
             const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
@@ -485,11 +491,8 @@
                             fetch(`/api/waveform-data/${currentJobId}/${speaker}`).then(r => r.json()),
                             `/api/original-audio/${currentJobId}/${speaker}`
                         ]);
-
-                        // Create a hidden audio element to share across segments
                         const audio = new Audio(audioUrl);
                         audio.preload = 'auto';
-
                         speakerDataCache[speaker] = {
                             peaks: waveformResp.peaks,
                             audioUrl: audioUrl,
@@ -512,7 +515,6 @@
 
                 block.innerHTML = `
                     <div class="flex flex-col lg:flex-row lg:items-center gap-6">
-                        <!-- Left Info Column -->
                         <div class="w-full lg:w-72 flex-shrink-0">
                             <div class="flex items-center justify-between mb-2">
                                 <span class="px-2 py-1 bg-indigo-100 text-indigo-700 rounded text-xs font-bold uppercase tracking-wider">${seg.speaker}</span>
@@ -536,7 +538,6 @@
                             </div>
                         </div>
 
-                        <!-- Right Editor Column -->
                         <div class="flex-1 min-w-0">
                             <div class="grid grid-cols-2 gap-4 mb-4">
                                 <div class="bg-gray-50 p-3 rounded-xl border border-gray-100">
@@ -560,15 +561,9 @@
                                 </div>
                             </div>
 
-                            <!-- Timeline Section -->
                             <div class="bg-white rounded-xl border border-gray-100 overflow-hidden shadow-inner relative">
                                 <div id="overview-${index}" class="w-full h-8 border-b border-gray-50"></div>
-                                <div id="zoomview-${index}" class="w-full h-16"></div>
-                                <div class="absolute top-0 right-0 p-1">
-                                    <button class="text-gray-300 hover:text-indigo-500 text-[10px] transition-colors" onclick="resetZoom(${index})">
-                                        <i class="fas fa-search-minus"></i>
-                                    </button>
-                                </div>
+                                <div id="zoomview-${index}" class="w-full h-12"></div>
                             </div>
                         </div>
                     </div>
@@ -577,104 +572,43 @@
                 initWaveform(index, seg.speaker, seg.source_start, seg.source_end);
             });
 
-            // Export functionality
             document.getElementById('exportCsvBtn').onclick = () => exportResults('csv');
             document.getElementById('exportJsonBtn').onclick = () => exportResults('json');
         }
-
-        let peaksInstances = {};
 
         function initWaveform(index, speaker, start, end) {
             const overviewContainer = document.getElementById(`overview-${index}`);
             const zoomviewContainer = document.getElementById(`zoomview-${index}`);
             const data = speakerDataCache[speaker];
-
             if (!data || !data.peaks) return;
 
-            // Share one AudioContext and one Audio source per speaker to save memory
             const options = {
-                overview: {
-                    container: overviewContainer,
-                    waveformColor: '#f1f5f9',
-                    playedWaveformColor: '#cbd5e1',
-                    highlightColor: '#818cf8',
-                    showAxisLabels: false,
-                    waveformHeight: 32
-                },
-                zoomview: {
-                    container: zoomviewContainer,
-                    waveformColor: '#e0e7ff',
-                    playheadColor: '#4f46e5',
-                    axisLabelColor: '#94a3b8',
-                    showAxisLabels: true,
-                    waveformHeight: 64
-                },
+                overview: { container: overviewContainer, waveformColor: '#f1f5f9', playedWaveformColor: '#cbd5e1', highlightColor: '#818cf8', showAxisLabels: false, waveformHeight: 32 },
+                zoomview: { container: zoomviewContainer, waveformColor: '#e0e7ff', playheadColor: '#4f46e5', axisLabelColor: '#94a3b8', showAxisLabels: true, waveformHeight: 48 },
                 mediaElement: data.sharedAudio,
-                data: {
-                    peaks: data.peaks
-                },
-                webAudio: {
-                    audioContext: data.audioContext,
-                    multiChannel: false
-                },
+                data: { peaks: data.peaks },
+                webAudio: { audioContext: data.audioContext, multiChannel: false },
                 contentEditable: false
             };
 
             peaks.init(options, (err, peaksInstance) => {
-                if (err) {
-                    console.error('Peaks init error:', err);
-                    return;
-                }
-
+                if (err) { console.error('Peaks init error:', err); return; }
                 peaksInstances[index] = peaksInstance;
-
-                // Create initial segment marker
-                peaksInstance.segments.add({
-                    id: `seg-marker-${index}`,
-                    startTime: start,
-                    endTime: end,
-                    editable: true,
-                    color: '#6366f1',
-                    labelText: 'Aligned'
-                });
-
+                peaksInstance.segments.add({ id: `seg-marker-${index}`, startTime: start, endTime: end, editable: true, color: '#6366f1', labelText: 'Aligned' });
                 const block = document.getElementById(`seg-${index}`);
                 const inputs = block.querySelectorAll('input');
-
                 const updateView = () => {
-                    const s = parseFloat(block.querySelector('.source-start').value);
-                    const e = parseFloat(block.querySelector('.source-end').value);
-                    const csvS = parseFloat(block.querySelector('.csv-start').value);
-                    const csvE = parseFloat(block.querySelector('.csv-end').value);
+                    const s = parseFloat(block.querySelector('.source-start').value), e = parseFloat(block.querySelector('.source-end').value);
+                    const csvS = parseFloat(block.querySelector('.csv-start').value), csvE = parseFloat(block.querySelector('.csv-end').value);
                     const tempo = parseFloat(block.querySelector('.tempo').value) || 1.0;
-
-                    // Update Peaks.js segment marker
                     const segment = peaksInstance.segments.getSegment(`seg-marker-${index}`);
-                    if (segment && !isNaN(s) && !isNaN(e) && e > s) {
-                        segment.update({ startTime: s, endTime: e });
-                        // Adjust zoom to show the segment
-                        peaksInstance.zoomview.setZoom({ startTime: s - 0.5, endTime: e + 0.5 });
-                    }
-
-                    // Update Delta Label
+                    if (segment && !isNaN(s) && !isNaN(e) && e > s) segment.update({ startTime: s, endTime: e });
                     const deltaLabel = block.querySelector('.delta-label');
-                    const targetDuration = csvE - csvS;
-                    const sourceDuration = (e - s) / tempo;
-                    const diff = sourceDuration - targetDuration;
-
-                    if (Math.abs(diff) < 0.01) {
-                        deltaLabel.textContent = 'Perfect Match';
-                        deltaLabel.className = 'delta-label text-green-500';
-                    } else if (diff > 0) {
-                        deltaLabel.textContent = `+${diff.toFixed(2)}s Added`;
-                        deltaLabel.className = 'delta-label text-blue-500';
-                    } else {
-                        deltaLabel.textContent = `${diff.toFixed(2)}s Removed`;
-                        deltaLabel.className = 'delta-label text-orange-500';
-                    }
+                    const targetDuration = csvE - csvS, sourceDuration = (e - s) / tempo, diff = sourceDuration - targetDuration;
+                    if (Math.abs(diff) < 0.01) { deltaLabel.textContent = 'Perfect Match'; deltaLabel.className = 'delta-label text-green-500 text-[10px] font-black uppercase bg-green-50 px-2 py-0.5 rounded-full'; }
+                    else if (diff > 0) { deltaLabel.textContent = `+${diff.toFixed(2)}s Added`; deltaLabel.className = 'delta-label text-blue-500 text-[10px] font-black uppercase bg-blue-50 px-2 py-0.5 rounded-full'; }
+                    else { deltaLabel.textContent = `${diff.toFixed(2)}s Removed`; deltaLabel.className = 'delta-label text-orange-500 text-[10px] font-black uppercase bg-orange-50 px-2 py-0.5 rounded-full'; }
                 };
-
-                // Sync Peaks.js segment changes back to inputs
                 peaksInstance.on('segments.dragged', (segment) => {
                     if (segment.id === `seg-marker-${index}`) {
                         block.querySelector('.source-start').value = segment.startTime.toFixed(2);
@@ -682,67 +616,39 @@
                         updateView();
                     }
                 });
-
                 inputs.forEach(input => input.addEventListener('input', updateView));
-
-                // Initial view update
                 setTimeout(updateView, 100);
             });
         }
 
-        function resetZoom(index) {
-            const pk = peaksInstances[index];
-            if (pk) {
-                const s = parseFloat(document.querySelector(`#seg-${index} .source-start`).value);
-                const e = parseFloat(document.querySelector(`#seg-${index} .source-end`).value);
-                pk.zoomview.setZoom({ startTime: s - 0.5, endTime: e + 0.5 });
-            }
+        function batchAdjust(field, delta) {
+            const selector = field === 'start' ? '.source-start' : '.source-end';
+            document.querySelectorAll(selector).forEach(input => {
+                const newVal = Math.max(0, parseFloat(input.value) + delta);
+                input.value = newVal.toFixed(2);
+                input.dispatchEvent(new Event('input'));
+            });
+            showToast(`Adjusted all ${field}s by ${delta}s`, 'success');
         }
 
         function previewSegment(btn, speaker, index) {
-            const pk = peaksInstances[index];
             const data = speakerDataCache[speaker];
             const audio = data.sharedAudio;
-
             if (activeAudio) {
                 activeAudio.pause();
                 const oldBtn = activeAudio.btn;
                 if (oldBtn) oldBtn.innerHTML = '<i class="fas fa-play mr-2"></i> Preview';
-
-                if (activeAudio === audio && activeAudio.segmentIndex === index) {
-                    activeAudio = null;
-                    return;
-                }
+                if (activeAudio === audio && activeAudio.segmentIndex === index) { activeAudio = null; return; }
             }
-
             const block = document.getElementById(`seg-${index}`);
-            const start = parseFloat(block.querySelector('.source-start').value);
-            const end = parseFloat(block.querySelector('.source-end').value);
+            const start = parseFloat(block.querySelector('.source-start').value), end = parseFloat(block.querySelector('.source-end').value);
             const tempo = parseFloat(block.querySelector('.tempo').value) || 1.0;
-
-            if (isNaN(start) || isNaN(end) || start >= end) {
-                showToast('Invalid start/end times', 'error');
-                return;
-            }
-
-            audio.playbackRate = tempo;
-            audio.currentTime = start;
-            audio.segmentIndex = index;
-            activeAudio = audio;
-            audio.btn = btn;
-            btn.innerHTML = '<i class="fas fa-stop mr-2"></i> Stop';
-
-            const duration = (end - start) / tempo;
-
-            audio.play().catch(e => {
-                showToast('Playback error: ' + e.message, 'error');
-                btn.innerHTML = '<i class="fas fa-play mr-2"></i> Preview';
-            });
-
+            if (isNaN(start) || isNaN(end) || start >= end) { showToast('Invalid start/end times', 'error'); return; }
+            audio.playbackRate = tempo; audio.currentTime = start; audio.segmentIndex = index; activeAudio = audio; audio.btn = btn; btn.innerHTML = '<i class="fas fa-stop mr-2"></i> Stop';
+            audio.play().catch(e => { showToast('Playback error: ' + e.message, 'error'); btn.innerHTML = '<i class="fas fa-play mr-2"></i> Preview'; });
             const checkEnd = () => {
                 if (audio.currentTime >= end || audio.paused || activeAudio !== audio || audio.segmentIndex !== index) {
-                    audio.pause();
-                    btn.innerHTML = '<i class="fas fa-play mr-2"></i> Preview';
+                    audio.pause(); btn.innerHTML = '<i class="fas fa-play mr-2"></i> Preview';
                     if (activeAudio === audio && audio.segmentIndex === index) activeAudio = null;
                     audio.removeEventListener('timeupdate', checkEnd);
                 }
@@ -771,7 +677,7 @@
 
             let content, filename, mime;
             if (format === 'csv') {
-                const headers = ['speaker', 'text_ro', 'text_en', 'csv_start', 'csv_end', 'source_start', 'source_end', 'tempo', 'confidence'];
+                const headers = ['speaker', 'text_ro', 'text_en', 'csv_start', 'csv_end', 'source_start', 'source_end', 'confidence'];
                 const csv = [headers.join(',')];
                 data.forEach(row => {
                     csv.push(headers.map(h => row[h]).join(','));
