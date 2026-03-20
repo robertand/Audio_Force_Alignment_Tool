@@ -4,6 +4,9 @@ import numpy as np
 import soundfile as sf
 import librosa
 from scipy import signal
+import logging
+
+logger = logging.getLogger(__name__)
 
 class AudioProcessor:
     def __init__(self, target_sr=16000):
@@ -13,18 +16,30 @@ class AudioProcessor:
     def load_audio(self, file_path):
         """Load audio file and resample if necessary"""
         try:
-            # Try torchaudio first
+            # Try torchaudio first (supports GPU)
             waveform, sr = torchaudio.load(file_path)
-            waveform = waveform.mean(dim=0).numpy()  # Convert to mono
+            
+            # Convert to mono if needed
+            if waveform.shape[0] > 1:
+                waveform = torch.mean(waveform, dim=0, keepdim=True)
+            
+            # Move to CPU for processing (or keep on GPU if needed)
+            if self.device == 'cuda':
+                waveform = waveform.cuda()
             
             if sr != self.target_sr:
-                # Resample using librosa
-                waveform = librosa.resample(waveform, orig_sr=sr, target_sr=self.target_sr)
+                # Resample using torchaudio (GPU accelerated if available)
+                resampler = torchaudio.transforms.Resample(sr, self.target_sr).to(waveform.device)
+                waveform = resampler(waveform)
                 sr = self.target_sr
-                
-        except Exception:
-            # Fallback to soundfile
+            
+            # Convert to numpy for compatibility
+            waveform = waveform.cpu().numpy().flatten()
+            
+        except Exception as e:
+            logger.warning(f"Torchaudio failed, falling back to soundfile: {e}")
             try:
+                # Fallback to soundfile
                 waveform, sr = sf.read(file_path)
                 if waveform is None:
                     raise Exception("Soundfile returned None")
@@ -38,12 +53,14 @@ class AudioProcessor:
             except Exception as e:
                 raise Exception(f"Failed to load audio file {file_path}: {str(e)}")
         
-        # Ensure waveform is not None before normalization
+        # Ensure waveform is not None
         if waveform is None:
             raise Exception(f"Failed to load audio from {file_path}")
 
         # Normalize
-        waveform = waveform / np.max(np.abs(waveform) + 1e-8)
+        max_val = np.max(np.abs(waveform))
+        if max_val > 0:
+            waveform = waveform / max_val
         
         return waveform, sr
     
@@ -90,11 +107,15 @@ class AudioProcessor:
         start_sample = self.find_best_cut_point(audio, sr, start_time)
         end_sample = self.find_best_cut_point(audio, sr, end_time)
 
+        # Ensure valid range
+        start_sample = max(0, min(start_sample, len(audio) - 1))
+        end_sample = max(start_sample + 1, min(end_sample, len(audio)))
+
         # Extract
         segment = audio[start_sample:end_sample]
         
         # Apply small fade in/out to avoid clicks
-        fade_length = int(0.01 * sr)  # 10ms fade
+        fade_length = min(int(0.01 * sr), len(segment) // 4)  # 10ms fade or less
         if len(segment) > 2 * fade_length:
             fade_in = np.linspace(0, 1, fade_length)
             fade_out = np.linspace(1, 0, fade_length)
@@ -116,7 +137,9 @@ class AudioProcessor:
         )[0]
         
         # Normalize energy
-        energy = energy / np.max(energy + 1e-8)
+        max_energy = np.max(energy)
+        if max_energy > 0:
+            energy = energy / max_energy
         
         # Find silence frames
         silence_frames = energy < threshold
