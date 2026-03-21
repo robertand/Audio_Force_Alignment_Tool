@@ -824,8 +824,9 @@
 
                 if (endDelta !== 0) {
                     const val = parseFloat(endInput.value);
+                    const startVal = parseFloat(startInput.value);
                     if (!isNaN(val)) {
-                        const newVal = val + endDelta;
+                        const newVal = Math.max(startVal + 0.1, val + endDelta);
                         endInput.value = newVal.toFixed(2);
                         endInput.dispatchEvent(new Event('input'));
                     }

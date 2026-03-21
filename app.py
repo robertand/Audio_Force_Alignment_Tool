@@ -159,6 +159,9 @@ def background_alignment(job_id, segments, speakers_to_process, audio_files_info
         total_segments_to_process = sum(1 for s in segments if s['speaker'] in speakers_to_process)
         processed_segments_count = 0
 
+        if total_segments_to_process == 0:
+            total_segments_to_process = 1 # Avoid division by zero
+
         for speaker in speakers_to_process:
             # Update status
             with jobs_lock:
@@ -196,7 +199,7 @@ def background_alignment(job_id, segments, speakers_to_process, audio_files_info
                     audio_full, sr_full = audio_processor.load_audio(audio_path)
                     onsets = audio_processor.detect_onsets(audio_full, sr_full)
 
-                    if onsets is not None and len(onsets) > 0:
+                    if alignments and onsets is not None and len(onsets) > 0:
                         for idx_align, entry in enumerate(alignments[:num_refinement_segments]):
                             aligned = entry.get('aligned')
                             if aligned:
@@ -211,6 +214,26 @@ def background_alignment(job_id, segments, speakers_to_process, audio_files_info
 
                                 if closest_onset is not None:
                                     aligned['start'] = closest_onset
+
+                        # Special case for VERY first segment: Force start at 0:00
+                        # and refine duration based on word count vs. onsets
+                        first_entry = alignments[0]
+                        first_aligned = first_entry.get('aligned')
+                        if first_aligned:
+                            first_aligned['start'] = 0.0
+
+                            # Count words in Romanian text
+                            words_ro = first_entry['original'].get('text_ro', '').split()
+                            word_count = len(words_ro)
+
+                            if word_count > 0:
+                                # If we have enough onsets, use them for end boundary
+                                if len(onsets) >= word_count:
+                                    target_onset_idx = min(word_count, len(onsets) - 1)
+                                    first_aligned['end'] = max(onsets[target_onset_idx], 0.1)
+                                else:
+                                    # Fallback: estimate duration based on words (e.g. 0.4s/word)
+                                    first_aligned['end'] = word_count * 0.4
                 except Exception as e:
                     logger.error(f"Hump-refinement failed for {speaker}: {e}")
 
