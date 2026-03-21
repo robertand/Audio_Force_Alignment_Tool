@@ -52,8 +52,9 @@ class DialogueAligner:
             
             transcribed_segments = result.get('segments', [])
 
-            # 2. Match transcriptions to expected segments
+            # 2. Match transcriptions to expected segments (Chronological Pass)
             aligned_results = []
+            cursor = 0.0 # Time cursor for sequential alignment
 
             for expected in expected_segments:
                 expected_text = expected.get('text_ro', '').strip()
@@ -65,6 +66,11 @@ class DialogueAligner:
                 best_words = []
 
                 for transcribed in transcribed_segments:
+                    # Skip segments that clearly happened before our current cursor
+                    # (Allow for some small overlap if needed)
+                    if transcribed['end'] < cursor - 0.2:
+                        continue
+
                     trans_text = transcribed['text'].strip()
                     
                     # Calculate similarity
@@ -90,6 +96,8 @@ class DialogueAligner:
 
                 # Only accept if confidence is good enough
                 if best_match and highest_ratio >= min_confidence:
+                    # Update cursor
+                    cursor = best_match['end']
                     # Use word-level timestamps if available
                     if best_words and len(best_words) > 0:
                         aligned_start = best_words[0]['start']
@@ -114,6 +122,45 @@ class DialogueAligner:
                         'original': expected,
                         'aligned': None
                     })
+
+            # 3. Outlier Detection and Localized Re-search
+            # If segment N was found far after segment N-1 but also far before N+1,
+            # but N itself has a timestamp that's way out of order, re-search.
+            for i in range(1, len(aligned_results) - 1):
+                prev = aligned_results[i-1].get('aligned')
+                curr = aligned_results[i].get('aligned')
+                nxt = aligned_results[i+1].get('aligned')
+
+                if curr and prev and nxt:
+                    # If current is NOT between prev and next (Out of Order)
+                    if not (prev['end'] - 0.5 <= curr['start'] <= nxt['start'] + 0.5):
+                        logger.info(f"Segment {i} is outlier (Order: {prev['end']} -> {curr['start']} -> {nxt['start']}). Re-aligning...")
+
+                        # Search again specifically between prev and next
+                        gap_start = prev['end']
+                        gap_end = nxt['start']
+                        expected_text = aligned_results[i]['original'].get('text_ro', '').strip()
+
+                        best_local_match = None
+                        highest_local_ratio = 0.0
+
+                        for transcribed in transcribed_segments:
+                            # Only look in the gap
+                            if transcribed['start'] >= gap_start - 0.5 and transcribed['end'] <= gap_end + 0.5:
+                                ratio = difflib.SequenceMatcher(None, expected_text.lower(), transcribed['text'].strip().lower()).ratio()
+                                if ratio > highest_local_ratio:
+                                    highest_local_ratio = ratio
+                                    best_local_match = transcribed
+
+                        if best_local_match and highest_local_ratio >= 0.3: # Relaxed threshold for local gap search
+                            logger.info(f"Found better local match for outlier {i} at {best_local_match['start']}")
+                            aligned_results[i]['aligned'] = {
+                                'start': best_local_match['start'],
+                                'end': best_local_match['end'],
+                                'text': best_local_match['text'],
+                                'confidence': highest_local_ratio,
+                                'words': best_local_match.get('words', [])
+                            }
 
             return aligned_results
 

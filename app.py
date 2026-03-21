@@ -215,6 +215,43 @@ def background_alignment(job_id, segments, speakers_to_process, audio_files_info
                                 if closest_onset is not None:
                                     aligned['start'] = closest_onset
 
+                        # Systematic cropping and padding for ALL segments
+                        # Crop leading silence and add 0.5s padding to end
+                        for idx_p, entry in enumerate(alignments):
+                            aligned = entry.get('aligned')
+                            if not aligned:
+                                continue
+
+                            # 1. Silence Crop (Find first onset in or near segment)
+                            current_start = aligned['start']
+                            first_local_onset = None
+                            for onset in onsets:
+                                if abs(onset - current_start) < 1.0: # 1s window
+                                    first_local_onset = onset
+                                    break
+
+                            if first_local_onset is not None:
+                                aligned['start'] = max(0, first_local_onset - 0.1) # Crop to 100ms before first sound
+
+                            # 2. Add 0.5s Default Padding to End
+                            aligned['end'] += 0.5
+
+                        # 3. Apply NO OVERLAP Rule
+                        for i in range(1, len(alignments)):
+                            prev = alignments[i-1].get('aligned')
+                            curr = alignments[i].get('aligned')
+
+                            if prev and curr:
+                                # Ensure current start is at least the previous end
+                                if curr['start'] < prev['end']:
+                                    # If overlapping, we favor the previous segment (sequential order)
+                                    # and start current immediately after previous
+                                    curr['start'] = prev['end']
+
+                                    # Ensure segment still has duration
+                                    if curr['end'] <= curr['start']:
+                                        curr['end'] = curr['start'] + 0.1
+
                         # Special case for VERY first segment: Force start at 0:00
                         # and refine duration based on word count vs. onsets
                         first_entry = alignments[0]
