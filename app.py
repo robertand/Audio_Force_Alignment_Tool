@@ -232,8 +232,11 @@ def background_alignment(job_id, segments, speakers_to_process, audio_files_info
 
                             if first_local_onset is not None:
                                 aligned['start'] = max(0, first_local_onset - 0.1) # Crop to 100ms before first sound
+                            else:
+                                # Fallback: if no onset found, try to find the absolute beginning of energy
+                                pass
 
-                            # 2. Add 0.5s Default Padding to End
+                            # 2. Add 0.5s Default Padding to End (User requested +0.5s default)
                             aligned['end'] += 0.5
 
                         # 3. Apply NO OVERLAP Rule
