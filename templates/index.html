@@ -271,6 +271,7 @@
         let currentJobId = null;
         let jobAlignmentResults = null;
         let activeAudio = null;
+        let previewActive = false; // Flag to control Project Preview
         let speakerWaveforms = {}; // Cache for speaker waveform peaks
 
         // Initialize
@@ -617,6 +618,7 @@
 
                 if (activeAudio === btn.audio) {
                     activeAudio = null;
+                    previewActive = false; // Stop preview if manual stop
                     return;
                 }
             }
@@ -868,6 +870,13 @@
         }
 
         async function previewProject() {
+            if (previewActive) {
+                previewActive = false;
+                if (activeAudio) activeAudio.pause();
+                showToast('Preview Stopped', 'info');
+                return;
+            }
+
             const blocks = Array.from(document.querySelectorAll('#segmentList > div'));
             const segments = blocks.map((block, index) => ({
                 index,
@@ -884,9 +893,12 @@
 
             if (segments.length === 0) return;
 
-            showToast('Starting Project Preview (Sequential by CSV timecodes)', 'info');
+            previewActive = true;
+            showToast('Starting Project Preview (Click again to stop)', 'info');
 
             for (const seg of segments) {
+                if (!previewActive) break;
+
                 // Flash the segment block
                 const el = document.getElementById(`seg-${seg.index}`);
                 el.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -903,8 +915,9 @@
                     }, (duration * 1000) + 200); // 200ms gap
                 });
 
-                if (activeAudio === null) break; // Interrupted
+                if (!activeAudio || !previewActive) break; // Interrupted
             }
+            previewActive = false;
         }
 
         function startNew() {

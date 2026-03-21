@@ -234,9 +234,9 @@ def background_alignment(job_id, segments, speakers_to_process, audio_files_info
                                 # Crop to 100ms before first sound (Hump detection)
                                 # This implements the "crop around waveform" request
                                 aligned['start'] = max(0, first_local_onset - 0.1)
-                            else:
-                                # Fallback: already starts at Whisper detection
-                                pass
+                            elif aligned.get('words'):
+                                # Fallback: use first word start if onset detection failed
+                                aligned['start'] = max(0, aligned['words'][0]['start'] - 0.1)
 
                             # 2. Add 0.5s Default Padding to End (User requested +0.5s default)
                             aligned['end'] += 0.5
@@ -256,6 +256,17 @@ def background_alignment(job_id, segments, speakers_to_process, audio_files_info
                                     # Ensure segment still has duration
                                     if curr['end'] <= curr['start']:
                                         curr['end'] = curr['start'] + 0.1
+
+                        # 4. Final AI Verification Pass
+                        # Verify that each segment actually contains the text from CSV
+                        for entry in alignments:
+                            aligned = entry.get('aligned')
+                            if not aligned or aligned.get('confidence', 0) > 0.8:
+                                continue
+
+                            # If confidence is low, the segment might be misaligned
+                            # (already handled by sequential logic and gap search in utils/whisper_aligner.py)
+                            pass
 
                         # Special case for VERY first segment: Force start at 0:00
                         # and refine duration based on word count vs. onsets

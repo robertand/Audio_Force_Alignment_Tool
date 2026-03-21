@@ -52,10 +52,12 @@ class DialogueAligner:
             
             transcribed_segments = result.get('segments', [])
 
-            # 2. Match transcriptions to expected segments (Sequential Pass)
+            # 2. Match transcriptions to expected segments (Strict Sequential Pass)
             aligned_results = []
 
-            # First Pass: Find High-Confidence Anchor Segments
+            # Greedy Sequential Search with Word-Level Snapping
+            # This ensures segments are found in order and don't jump backward
+            trans_idx = 0
             for expected in expected_segments:
                 expected_text = expected.get('text_ro', '').strip()
                 if not expected_text:
@@ -64,66 +66,87 @@ class DialogueAligner:
 
                 best_match = None
                 highest_ratio = 0.0
-                for transcribed in transcribed_segments:
-                    ratio = difflib.SequenceMatcher(None, self._normalize_text(expected_text), self._normalize_text(transcribed['text'])).ratio()
+                best_trans_idx = trans_idx
+
+                # Search among remaining transcriptions
+                # Look ahead up to 20 segments to find best match in sequence
+                search_limit = min(trans_idx + 20, len(transcribed_segments))
+                for i in range(trans_idx, search_limit):
+                    transcribed = transcribed_segments[i]
+                    ratio = difflib.SequenceMatcher(
+                        None,
+                        self._normalize_text(expected_text),
+                        self._normalize_text(transcribed['text'])
+                    ).ratio()
+
                     if ratio > highest_ratio:
                         highest_ratio = ratio
                         best_match = transcribed
+                        best_trans_idx = i
 
-                if best_match and highest_ratio > 0.7: # High threshold for anchors
+                # If we found a decent match in sequence
+                if best_match and highest_ratio > 0.4:
+                    # Update global transcription index to maintain order
+                    trans_idx = best_trans_idx + 1
+
+                    # Word-level snapping: precisely define start/end by words
+                    words = best_match.get('words', [])
+                    if words:
+                        start = words[0]['start']
+                        end = words[-1]['end']
+                    else:
+                        start = best_match['start']
+                        end = best_match['end']
+
                     aligned_results.append({
                         'original': expected,
                         'aligned': {
-                            'start': best_match['start'],
-                            'end': best_match['end'],
+                            'start': start,
+                            'end': end,
                             'text': best_match['text'],
                             'confidence': highest_ratio,
-                            'words': best_match.get('words', [])
+                            'words': words
                         }
                     })
                 else:
+                    # Not found in immediate sequence
                     aligned_results.append({'original': expected, 'aligned': None})
 
-            # Second Pass: Fill the gaps between anchors sequentially
+            # 3. Gap-Based Re-search & Verification
+            # For any missing segments, search in the specific audio gap between neighbors
             for i in range(len(aligned_results)):
                 if aligned_results[i]['aligned'] is not None:
-                    continue # Already anchored
+                    continue
 
-                # Determine valid gap window
                 gap_start = 0.0
-                gap_end = audio.shape[0] / 16000.0 # Full duration
+                gap_end = audio.shape[0] / 16000.0
 
-                # Look back for nearest preceding anchor
-                for j in range(i - 1, -1, -1):
-                    if aligned_results[j]['aligned']:
-                        gap_start = aligned_results[j]['aligned']['end']
-                        break
+                if i > 0 and aligned_results[i-1]['aligned']:
+                    gap_start = aligned_results[i-1]['aligned']['end']
 
-                # Look ahead for nearest succeeding anchor
-                for j in range(i + 1, len(aligned_results)):
-                    if aligned_results[j]['aligned']:
-                        gap_end = aligned_results[j]['aligned']['start']
-                        break
+                if i < len(aligned_results) - 1 and aligned_results[i+1]['aligned']:
+                    gap_end = aligned_results[i+1]['aligned']['start']
 
                 expected_text = aligned_results[i]['original'].get('text_ro', '').strip()
-                best_local_match = None
-                highest_local_ratio = 0.0
+                best_gap_match = None
+                highest_gap_ratio = 0.0
 
+                # Search all transcriptions specifically within this gap
                 for transcribed in transcribed_segments:
-                    # Match must be within the gap
-                    if transcribed['start'] >= gap_start - 0.2 and transcribed['end'] <= gap_end + 0.2:
+                    if transcribed['start'] >= gap_start - 0.5 and transcribed['end'] <= gap_end + 0.5:
                         ratio = difflib.SequenceMatcher(None, self._normalize_text(expected_text), self._normalize_text(transcribed['text'])).ratio()
-                        if ratio > highest_local_ratio:
-                            highest_local_ratio = ratio
-                            best_local_match = transcribed
+                        if ratio > highest_gap_ratio:
+                            highest_gap_ratio = ratio
+                            best_gap_match = transcribed
 
-                if best_local_match and highest_local_ratio >= 0.3:
+                if best_gap_match and highest_gap_ratio >= 0.3:
+                    words = best_gap_match.get('words', [])
                     aligned_results[i]['aligned'] = {
-                        'start': best_local_match['start'],
-                        'end': best_local_match['end'],
-                        'text': best_local_match['text'],
-                        'confidence': highest_local_ratio,
-                        'words': best_local_match.get('words', [])
+                        'start': words[0]['start'] if words else best_gap_match['start'],
+                        'end': words[-1]['end'] if words else best_gap_match['end'],
+                        'text': best_gap_match['text'],
+                        'confidence': highest_gap_ratio,
+                        'words': words
                     }
                 else:
                     # Third Pass: Chronological Interpolation (Fallback)
