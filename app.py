@@ -220,7 +220,11 @@ def background_alignment(job_id, segments, speakers_to_process, audio_files_info
                         first_entry = alignments[0]
                         first_aligned = first_entry.get('aligned')
                         if first_aligned:
-                            first_aligned['start'] = 0.0
+                            # Force start of the first segment to be the first audio hump (crop leading silence)
+                            # But keep csv_start at 0 so it's placed at the track beginning
+                            first_onset = onsets[0] if len(onsets) > 0 else 0.0
+                            first_aligned['start'] = max(0, first_onset - 0.5) # Leave 0.5s padding
+                            first_entry['original']['start'] = 0.0 # Force csv_start
 
                             # Count words in Romanian text
                             words_ro = first_entry['original'].get('text_ro', '').split()
@@ -230,10 +234,10 @@ def background_alignment(job_id, segments, speakers_to_process, audio_files_info
                                 # If we have enough onsets, use them for end boundary
                                 if len(onsets) >= word_count:
                                     target_onset_idx = min(word_count, len(onsets) - 1)
-                                    first_aligned['end'] = max(onsets[target_onset_idx], 0.1)
+                                    first_aligned['end'] = max(onsets[target_onset_idx], first_aligned['start'] + 0.1)
                                 else:
                                     # Fallback: estimate duration based on words (e.g. 0.4s/word)
-                                    first_aligned['end'] = word_count * 0.4
+                                    first_aligned['end'] = first_aligned['start'] + (word_count * 0.4)
                 except Exception as e:
                     logger.error(f"Hump-refinement failed for {speaker}: {e}")
 
