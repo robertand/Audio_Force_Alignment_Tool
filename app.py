@@ -231,9 +231,11 @@ def background_alignment(job_id, segments, speakers_to_process, audio_files_info
                                     break
 
                             if first_local_onset is not None:
-                                aligned['start'] = max(0, first_local_onset - 0.1) # Crop to 100ms before first sound
+                                # Crop to 100ms before first sound (Hump detection)
+                                # This implements the "crop around waveform" request
+                                aligned['start'] = max(0, first_local_onset - 0.1)
                             else:
-                                # Fallback: if no onset found, try to find the absolute beginning of energy
+                                # Fallback: already starts at Whisper detection
                                 pass
 
                             # 2. Add 0.5s Default Padding to End (User requested +0.5s default)
