@@ -6,6 +6,7 @@
     <title>Audio Force Alignment Tool</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.min.js"></script>
+    <script src="https://unpkg.com/wavesurfer.js@7/dist/plugins/regions.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
         @keyframes pulse {
@@ -547,6 +548,7 @@
         }
 
         let waveforms = {};
+        let regions = {};
 
         function initWaveform(index, speaker, start, end) {
             const container = document.getElementById(`waveform-${index}`);
@@ -564,7 +566,9 @@
                 duration: speakerData.duration,
             });
 
+            const wsRegions = ws.registerPlugin(WaveSurfer.Regions.create());
             waveforms[index] = ws;
+            regions[index] = wsRegions;
 
             ws.on('ready', () => {
                 updateView();
@@ -584,6 +588,16 @@
                 if (!isNaN(s) && !isNaN(e) && e > s) {
                     ws.zoom(container.clientWidth / (e - s));
                     container.scrollLeft = s * (container.scrollWidth / speakerData.duration);
+
+                    // Update region visualization (vertical bars)
+                    regions[index].clearRegions();
+                    regions[index].addRegion({
+                        start: s,
+                        end: e,
+                        color: 'rgba(99, 102, 241, 0.2)',
+                        drag: false,
+                        resize: false
+                    });
                 }
 
                 // Update Delta Label
