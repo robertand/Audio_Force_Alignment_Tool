@@ -11,4 +11,4 @@ pandas==2.0.3
 scipy==1.10.1
 matplotlib==3.7.2
 whisper-timestamped==1.14.2
-ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git
+transformers>=4.34
