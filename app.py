@@ -180,6 +180,10 @@ def background_alignment(job_id, segments, speakers_to_process, audio_files_info
             # Filter segments for this character
             char_segments = [s for s in segments if s['speaker'] == speaker]
 
+            # Detect onsets for the speaker's audio (used for hump-to-word logic)
+            speaker_audio, speaker_sr = audio_processor.load_audio(audio_path)
+            onsets = audio_processor.detect_onsets(speaker_audio, speaker_sr)
+
             # Identify first 10% of segments for hump-based refinement
             num_refinement_segments = max(1, len(char_segments) // 10)
 
@@ -219,6 +223,7 @@ def background_alignment(job_id, segments, speakers_to_process, audio_files_info
 
                         # Systematic cropping and padding for ALL segments
                         # Crop leading silence and add 0.5s padding to end
+                        from utils.text_utils import clean_text_for_alignment
                         for idx_p, entry in enumerate(alignments):
                             aligned = entry.get('aligned')
                             if not aligned:
@@ -240,20 +245,36 @@ def background_alignment(job_id, segments, speakers_to_process, audio_files_info
                                 # Fallback: already starts at Whisper detection
                                 pass
 
-                            # 2. Add 0.5s Default Padding to End (User requested +0.5s default)
+                            # 2. Hump-to-Word Rule: Trim segment if there are more "gâlme" than words
+                            # Identify text and word count
+                            expected_text = clean_text_for_alignment(entry['original'].get('text_ro', ''))
+                            num_words = len(expected_text.split())
+
+                            if num_words > 0:
+                                seg_onsets = audio_processor.get_segment_onsets(onsets, aligned['start'], aligned['end'])
+
+                                # If we have more humps than words, we trim to the last valid word's hump
+                                if len(seg_onsets) > num_words:
+                                    logger.info(f"Trimming segment: found {len(seg_onsets)} humps for {num_words} words. Text: {expected_text}")
+                                    # Set end to shortly after the last intended word's hump
+                                    # We add 0.2s padding after the last word onset
+                                    aligned['end'] = seg_onsets[num_words-1] + 0.2
+
+                            # 3. Add 0.5s Default Padding to End (User requested +0.5s default)
                             aligned['end'] += 0.5
 
-                        # 3. Apply NO OVERLAP Rule
+                        # 4. Apply NO OVERLAP Rule
                         for i in range(1, len(alignments)):
                             prev = alignments[i-1].get('aligned')
                             curr = alignments[i].get('aligned')
 
                             if prev and curr:
                                 # Ensure current start is at least the previous end
-                                if curr['start'] < prev['end']:
-                                    # If overlapping, we favor the previous segment (sequential order)
-                                    # and start current immediately after previous
-                                    curr['start'] = prev['end']
+                                # We enforce a tiny 50ms gap between segments for clarity
+                                if curr['start'] < prev['end'] + 0.05:
+                                    # If overlapping or too close, we favor the previous segment (sequential order)
+                                    # and start current shortly after previous ends
+                                    curr['start'] = prev['end'] + 0.05
 
                                     # Ensure segment still has duration
                                     if curr['end'] <= curr['start']:
