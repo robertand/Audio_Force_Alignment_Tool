@@ -65,16 +65,14 @@ class WhisperXAligner:
             logger.info(f"Transcribing {audio_path} with WhisperX (Initial Prompt: {initial_prompt})...")
 
             # WhisperX uses faster-whisper under the hood.
-            # We can pass asr_options to set initial_prompt.
-            asr_options = {
-                "initial_prompt": initial_prompt
-            }
+            # Note: initial_prompt was causing TypeError in some versions,
+            # we will omit it for now as WhisperX's transcribe method
+            # doesn't explicitly expose it in all versions/wrappers.
 
             result = self.model.transcribe(
                 audio,
                 batch_size=kwargs.get('batch_size', 16),
-                language=language,
-                **asr_options
+                language=language
             )
 
             # 3. Load Alignment Model (Romanian specific)

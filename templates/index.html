@@ -135,10 +135,6 @@
                                         <span>Whisper (Standard accuracy)</span>
                                     </label>
                                     <label class="flex items-center">
-                                        <input type="radio" name="aligner" value="mms" class="mr-2">
-                                        <span>MMS (Fast, legacy)</span>
-                                    </label>
-                                    <label class="flex items-center">
                                         <input type="radio" name="aligner" value="none" class="mr-2">
                                         <span>No alignment (direct mapping)</span>
                                     </label>
@@ -149,16 +145,16 @@
                                 <div>
                                     <label class="block text-sm font-medium mb-1">Whisper Model</label>
                                     <select id="whisperModel" class="w-full border rounded-lg px-3 py-2">
-                                        <optgroup label="Recommended for WhisperX">
-                                            <option value="large-v3" selected>OpenAI Large v3 (Best for Align)</option>
+                                        <optgroup label="WhisperX (Forced Alignment)">
+                                            <option value="large-v3" selected>OpenAI Large v3 (Exact Timestamps)</option>
+                                            <option value="large-v2">OpenAI Large v2</option>
                                             <option value="medium">Medium</option>
                                         </optgroup>
-                                        <optgroup label="Romanian Fine-tuned (Standard Whisper only)">
-                                            <option value="TransferRapid/whisper-large-v3-turbo_ro">RO Turbo (Large v3 fine-tuned)</option>
+                                        <optgroup label="Standard Whisper (Fine-tuned RO)">
+                                            <option value="TransferRapid/whisper-large-v3-turbo_ro">RO Turbo (Best for RO text)</option>
                                             <option value="iRaduS/whisper-romanian-finetune">RO Finetune (iRaduS)</option>
                                         </optgroup>
-                                        <optgroup label="Other Standard Models">
-                                            <option value="large-v2">OpenAI Large v2</option>
+                                        <optgroup label="Standard Whisper (Other)">
                                             <option value="small">Small</option>
                                             <option value="base">Base</option>
                                             <option value="tiny">Tiny</option>
@@ -427,7 +423,6 @@
             formData.append('segments', JSON.stringify(currentMetadata.segments));
             formData.append('use_whisperx', aligner === 'whisperx');
             formData.append('use_whisper', aligner === 'whisper');
-            formData.append('use_mms', aligner === 'mms');
             formData.append('whisper_model', document.getElementById('whisperModel').value);
             formData.append('initial_prompt', document.getElementById('initialPrompt').value);
 

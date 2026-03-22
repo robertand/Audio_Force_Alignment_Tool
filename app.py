@@ -60,7 +60,6 @@ jobs_lock = threading.Lock()
 
 # Lazy-loaded aligners with GPU support
 _whisper_aligner = None
-_mms_aligner = None
 _whisperx_aligner = None
 aligner_lock = threading.Lock()
 
@@ -77,18 +76,6 @@ def get_whisper_aligner(model_name="base"):
         elif _whisper_aligner.current_model_name != model_name:
             _whisper_aligner.ensure_model(model_name, device)
         return _whisper_aligner
-
-def get_mms_aligner():
-    global _mms_aligner
-    with aligner_lock:
-        if _mms_aligner is None:
-            try:
-                from utils.mms_aligner import MMSDialogueAligner
-                _mms_aligner = MMSDialogueAligner(device=device)
-            except Exception as e:
-                logger.error(f"Failed to load MMS aligner: {e}")
-                return None
-        return _mms_aligner
 
 def get_whisperx_aligner(model_name="TransferRapid/whisper-large-v3-turbo_ro"):
     global _whisperx_aligner
@@ -154,7 +141,7 @@ cleanup_thread.start()
 logger.info("Cleanup thread started")
 
 def background_alignment(job_id, segments, speakers_to_process, audio_files_info, 
-                        use_whisper, model_name, initial_prompt, use_mms=False, use_whisperx=False):
+                        use_whisper, model_name, initial_prompt, use_whisperx=False):
     """Background task for alignment processing"""
     try:
         aligner = None
@@ -166,10 +153,6 @@ def background_alignment(job_id, segments, speakers_to_process, audio_files_info
             aligner = get_whisper_aligner(model_name)
             if aligner is None:
                 raise Exception("Failed to initialize Whisper aligner")
-        elif use_mms:
-            aligner = get_mms_aligner()
-            if aligner is None:
-                raise Exception("Failed to initialize MMS aligner")
 
         all_alignments = []
         total_duration = max(s['end'] for s in segments) if segments else 0
@@ -472,7 +455,7 @@ def process_audio():
         thread = threading.Thread(
             target=background_alignment,
             args=(job_id, segments, speakers_to_process, audio_files_info, 
-                  use_whisper, model_name, initial_prompt, use_mms, use_whisperx)
+                  use_whisper, model_name, initial_prompt, use_whisperx)
         )
         thread.daemon = True
         thread.start()
