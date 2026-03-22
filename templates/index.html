@@ -6,6 +6,7 @@
     <title>Audio Force Alignment Tool</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.min.js"></script>
+    <script src="https://unpkg.com/wavesurfer.js@7/dist/plugins/regions.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
         @keyframes pulse {
@@ -21,6 +22,25 @@
         .glass-effect {
             background: rgba(255, 255, 255, 0.95);
             backdrop-filter: blur(10px);
+        }
+
+        /* Custom WaveSurfer Regions Styling */
+        .wavesurfer-region {
+            border-left: 2px solid #ef4444 !important;
+            border-right: 2px solid #ef4444 !important;
+            background-color: rgba(239, 68, 68, 0.1) !important;
+        }
+
+        .wavesurfer-region-handle {
+            width: 4px !important;
+            max-width: 4px !important;
+            background-color: #ef4444 !important;
+            opacity: 1 !important;
+        }
+
+        .wavesurfer-region-handle:hover {
+            background-color: #dc2626 !important;
+            cursor: col-resize;
         }
     </style>
 </head>
@@ -563,7 +583,10 @@
                 duration: speakerData.duration,
             });
 
-            waveforms[index] = ws;
+            // Initialize Regions plugin
+            const wsRegions = ws.registerPlugin(WaveSurfer.Regions.create());
+
+            waveforms[index] = { ws, wsRegions };
 
             ws.on('ready', () => {
                 updateView();
@@ -572,17 +595,56 @@
             const block = document.getElementById(`seg-${index}`);
             const inputs = block.querySelectorAll('input');
 
-            const updateView = () => {
+            // Handle Region updates (dragging)
+            let isUpdatingFromRegion = false;
+            wsRegions.on('region-updated', (region) => {
+                isUpdatingFromRegion = true;
+                const startInput = block.querySelector('.source-start');
+                const endInput = block.querySelector('.source-end');
+
+                // Update inputs
+                startInput.value = region.start.toFixed(2);
+                endInput.value = region.end.toFixed(2);
+
+                // Trigger input event to update delta label
+                startInput.dispatchEvent(new Event('input', { bubbles: true }));
+                isUpdatingFromRegion = false;
+            });
+
+            const updateView = (fromInput = false) => {
                 const s = parseFloat(block.querySelector('.source-start').value);
                 const e = parseFloat(block.querySelector('.source-end').value);
                 const csvS = parseFloat(block.querySelector('.csv-start').value);
                 const csvE = parseFloat(block.querySelector('.csv-end').value);
                 const tempo = parseFloat(block.querySelector('.tempo').value) || 1.0;
 
-                // Update Waveform zoom/view
-                if (!isNaN(s) && !isNaN(e) && e > s) {
-                    ws.zoom(container.clientWidth / (e - s));
-                    container.scrollLeft = s * (container.scrollWidth / speakerData.duration);
+                // Only update region if called from input AND not currently updating from region drag
+                if (!isUpdatingFromRegion && (fromInput || wsRegions.getRegions().length === 0)) {
+                    wsRegions.clearRegions();
+                    wsRegions.addRegion({
+                        id: `region-${index}`,
+                        start: s,
+                        end: e,
+                        color: 'rgba(239, 68, 68, 0.1)',
+                        drag: true,
+                        resize: true
+                    });
+                }
+
+                // Update Waveform zoom/view with padding
+                if (!isNaN(s) && !isNaN(e) && e > s && !fromInput) {
+                    const padding = (e - s) * 0.2; // 20% padding
+                    const viewStart = Math.max(0, s - padding);
+                    const viewEnd = Math.min(speakerData.duration, e + padding);
+                    const viewDuration = viewEnd - viewStart;
+
+                    ws.zoom(container.clientWidth / viewDuration);
+
+                    // Use setTimeout to ensure zoom is applied before scrolling
+                    setTimeout(() => {
+                        const scrollPos = viewStart * (container.scrollWidth / speakerData.duration);
+                        container.scrollLeft = scrollPos;
+                    }, 0);
                 }
 
                 // Update Delta Label
@@ -603,7 +665,10 @@
                 }
             };
 
-            inputs.forEach(input => input.addEventListener('input', updateView));
+            inputs.forEach(input => input.addEventListener('input', (e) => {
+                // updateView is called with fromInput=true to update region but NOT zoom/scroll
+                updateView(true);
+            }));
 
             // Initial view update
             setTimeout(updateView, 100);
@@ -644,8 +709,7 @@
                 audio.play();
 
                 // Sync waveform progress
-                const ws = waveforms[index];
-                const playStartTime = Date.now();
+                const { ws } = waveforms[index];
                 const duration = (end - start) / tempo;
 
                 const progressInterval = setInterval(() => {
@@ -653,9 +717,8 @@
                         clearInterval(progressInterval);
                         return;
                     }
-                    const elapsed = (Date.now() - playStartTime) / 1000;
-                    const currentPos = start + (elapsed * tempo);
-                    ws.setTime(currentPos);
+                    // Use audio.currentTime for exact position
+                    ws.setTime(audio.currentTime);
                 }, 50);
 
                 setTimeout(() => {
