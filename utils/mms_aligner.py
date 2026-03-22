@@ -39,6 +39,8 @@ class MMSDialogueAligner:
         """
         Align audio with expected segments using pure transformers/torch CTC alignment.
         """
+        from utils.text_utils import clean_text_for_alignment
+
         # Mapping common lang codes
         lang_map = {'ro': 'ron', 'ron': 'ron', 'en': 'eng', 'eng': 'eng'}
         language = lang_map.get(language, language)
@@ -50,7 +52,7 @@ class MMSDialogueAligner:
                 return [{'original': s, 'aligned': None} for s in expected_segments]
 
             # 2. Preprocess text
-            texts = [s.get('text_ro', '').strip() for s in expected_segments]
+            texts = [clean_text_for_alignment(s.get('text_ro', '')) for s in expected_segments]
             full_text = " ".join(texts)
             if not full_text:
                 return [{'original': s, 'aligned': None} for s in expected_segments]
@@ -97,7 +99,7 @@ class MMSDialogueAligner:
             word_idx = 0
 
             for expected in expected_segments:
-                expected_text = expected.get('text_ro', '').strip()
+                expected_text = clean_text_for_alignment(expected.get('text_ro', ''))
                 if not expected_text:
                     aligned_results.append({'original': expected, 'aligned': None})
                     continue

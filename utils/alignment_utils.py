@@ -188,15 +188,16 @@ class AlignmentUtils:
             end_str = match.group(3)
             text = match.group(4).strip()
 
-            # Simple speaker detection if text is "Speaker: text"
+            # Robust speaker detection
             speaker = "Unknown"
-            if ':' in text[:30]:
-                parts = text.split(':', 1)
-                potential_speaker = parts[0].strip()
-                # If it looks like a name (not too many words)
-                if 0 < len(potential_speaker.split()) <= 2:
+            # Look for "Name: " at the start of the line or the entire text
+            speaker_match = re.match(r'^([^:\n\[\]]+):\s*(.*)', text, re.DOTALL)
+            if speaker_match:
+                potential_speaker = speaker_match.group(1).strip()
+                # If it looks like a name (not too many words and not just tags)
+                if 0 < len(potential_speaker.split()) <= 3:
                     speaker = potential_speaker
-                    text = parts[1].strip()
+                    text = speaker_match.group(2).strip()
 
             segments.append({
                 'start': time_to_seconds(start_str),

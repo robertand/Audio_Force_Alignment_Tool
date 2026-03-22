@@ -25,6 +25,8 @@ class DialogueAligner:
         """
         Transcribe audio and align with expected segments from metadata
         """
+        from utils.text_utils import clean_text_for_alignment
+
         if model_name:
             self.ensure_model(model_name)
 
@@ -57,7 +59,7 @@ class DialogueAligner:
 
             # First Pass: Find High-Confidence Anchor Segments
             for expected in expected_segments:
-                expected_text = expected.get('text_ro', '').strip()
+                expected_text = clean_text_for_alignment(expected.get('text_ro', ''))
                 if not expected_text:
                     aligned_results.append({'original': expected, 'aligned': None})
                     continue
@@ -65,7 +67,7 @@ class DialogueAligner:
                 best_match = None
                 highest_ratio = 0.0
                 for transcribed in transcribed_segments:
-                    ratio = difflib.SequenceMatcher(None, self._normalize_text(expected_text), self._normalize_text(transcribed['text'])).ratio()
+                    ratio = difflib.SequenceMatcher(None, expected_text, self._normalize_text(transcribed['text'])).ratio()
                     if ratio > highest_ratio:
                         highest_ratio = ratio
                         best_match = transcribed
@@ -105,14 +107,14 @@ class DialogueAligner:
                         gap_end = aligned_results[j]['aligned']['start']
                         break
 
-                expected_text = aligned_results[i]['original'].get('text_ro', '').strip()
+                expected_text = clean_text_for_alignment(aligned_results[i]['original'].get('text_ro', ''))
                 best_local_match = None
                 highest_local_ratio = 0.0
 
                 for transcribed in transcribed_segments:
                     # Match must be within the gap
                     if transcribed['start'] >= gap_start - 0.2 and transcribed['end'] <= gap_end + 0.2:
-                        ratio = difflib.SequenceMatcher(None, self._normalize_text(expected_text), self._normalize_text(transcribed['text'])).ratio()
+                        ratio = difflib.SequenceMatcher(None, expected_text, self._normalize_text(transcribed['text'])).ratio()
                         if ratio > highest_local_ratio:
                             highest_local_ratio = ratio
                             best_local_match = transcribed
@@ -169,7 +171,7 @@ class DialogueAligner:
                 if not aligned:
                     continue
 
-                expected_text = self._normalize_text(entry['original'].get('text_ro', ''))
+                expected_text = clean_text_for_alignment(entry['original'].get('text_ro', ''))
                 aligned_text = self._normalize_text(aligned.get('text', ''))
 
                 # If similarity is very low, mark as low confidence
