@@ -127,12 +127,16 @@
                                 <label class="block text-sm font-medium mb-1">Alignment Engine</label>
                                 <div class="space-y-2">
                                     <label class="flex items-center">
-                                        <input type="radio" name="aligner" value="whisper" checked class="mr-2">
-                                        <span>Whisper (High accuracy, GPU accelerated)</span>
+                                        <input type="radio" name="aligner" value="whisperx" checked class="mr-2">
+                                        <span>WhisperX (Ultra-exact timestamps, RO optimized)</span>
+                                    </label>
+                                    <label class="flex items-center">
+                                        <input type="radio" name="aligner" value="whisper" class="mr-2">
+                                        <span>Whisper (Standard accuracy)</span>
                                     </label>
                                     <label class="flex items-center">
                                         <input type="radio" name="aligner" value="mms" class="mr-2">
-                                        <span>MMS (Fast, good for Romanian)</span>
+                                        <span>MMS (Fast, legacy)</span>
                                     </label>
                                     <label class="flex items-center">
                                         <input type="radio" name="aligner" value="none" class="mr-2">
@@ -145,11 +149,17 @@
                                 <div>
                                     <label class="block text-sm font-medium mb-1">Whisper Model</label>
                                     <select id="whisperModel" class="w-full border rounded-lg px-3 py-2">
-                                        <option value="tiny">Tiny (Fastest)</option>
-                                        <option value="base" selected>Base (Recommended)</option>
-                                        <option value="small">Small (Balanced)</option>
-                                        <option value="medium">Medium (Accurate)</option>
-                                        <option value="large">Large (Most accurate)</option>
+                                        <optgroup label="WhisperX / Romanian Optimized">
+                                            <option value="TransferRapid/whisper-large-v3-turbo_ro" selected>RO Turbo (Large v3 fine-tuned)</option>
+                                            <option value="iRaduS/whisper-romanian-finetune">RO Finetune (iRaduS)</option>
+                                        </optgroup>
+                                        <optgroup label="Standard Models">
+                                            <option value="large-v3">OpenAI Large v3</option>
+                                            <option value="medium">Medium</option>
+                                            <option value="small">Small</option>
+                                            <option value="base">Base</option>
+                                            <option value="tiny">Tiny</option>
+                                        </optgroup>
                                     </select>
                                 </div>
                                 <div>
@@ -412,6 +422,7 @@
 
             const formData = new FormData();
             formData.append('segments', JSON.stringify(currentMetadata.segments));
+            formData.append('use_whisperx', aligner === 'whisperx');
             formData.append('use_whisper', aligner === 'whisper');
             formData.append('use_mms', aligner === 'mms');
             formData.append('whisper_model', document.getElementById('whisperModel').value);

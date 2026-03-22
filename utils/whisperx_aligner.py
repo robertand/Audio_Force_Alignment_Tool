@@ -1,0 +1,178 @@
+import torch
+import numpy as np
+import difflib
+import logging
+import whisperx
+import os
+from typing import List, Dict, Any
+
+logger = logging.getLogger(__name__)
+
+class WhisperXAligner:
+    def __init__(self, model_name="TransferRapid/whisper-large-v3-turbo_ro", device=None, compute_type=None):
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.compute_type = compute_type or ("float16" if self.device == "cuda" else "int8")
+        self.current_model_name = model_name
+
+        logger.info(f"Loading WhisperX model {model_name} on {self.device} ({self.compute_type})")
+        self.model = whisperx.load_model(model_name, device=self.device, compute_type=self.compute_type)
+
+        # Cache for alignment models
+        self.align_models = {}
+
+    def ensure_model(self, model_name):
+        if model_name != self.current_model_name:
+            logger.info(f"Switching WhisperX model to {model_name}")
+            # Free memory
+            del self.model
+            if self.device == "cuda":
+                torch.cuda.empty_cache()
+
+            self.model = whisperx.load_model(model_name, device=self.device, compute_type=self.compute_type)
+            self.current_model_name = model_name
+
+    def align_character_audio(self, audio_path: str, expected_segments: List[Dict],
+                              language="ro", initial_prompt=None, **kwargs):
+        """
+        Transcribe and align using WhisperX for ultra-exact timestamps.
+        """
+        from utils.text_utils import clean_text_for_alignment
+
+        try:
+            # 1. Load audio
+            audio = whisperx.load_audio(audio_path)
+
+            # 2. Initial Transcription
+            logger.info(f"Transcribing {audio_path} with WhisperX (Initial Prompt: {initial_prompt})...")
+
+            # WhisperX uses faster-whisper under the hood.
+            # We can pass asr_options to set initial_prompt.
+            asr_options = {
+                "initial_prompt": initial_prompt
+            }
+
+            result = self.model.transcribe(
+                audio,
+                batch_size=kwargs.get('batch_size', 16),
+                language=language,
+                **asr_options
+            )
+
+            # 3. Load Alignment Model (Romanian specific)
+            align_model_name = "infinitejoy/wav2vec2-large-xls-r-300m-romanian" if language == "ro" else None
+
+            if language not in self.align_models:
+                logger.info(f"Loading alignment model for {language}: {align_model_name}")
+                self.align_models[language] = whisperx.load_align_model(
+                    language_code=language,
+                    device=self.device,
+                    model_name=align_model_name
+                )
+
+            align_model, metadata = self.align_models[language]
+
+            # 4. Perform Forced Alignment
+            logger.info("Performing WhisperX forced alignment...")
+            result = whisperx.align(
+                result["segments"],
+                align_model,
+                metadata,
+                audio,
+                self.device,
+                return_char_alignments=False
+            )
+
+            transcribed_segments = result.get('segments', [])
+
+            # 5. Match with expected segments
+            aligned_results = []
+
+            for expected in expected_segments:
+                expected_text = clean_text_for_alignment(expected.get('text_ro', ''))
+                if not expected_text:
+                    aligned_results.append({'original': expected, 'aligned': None})
+                    continue
+
+                best_match = None
+                highest_ratio = 0.0
+
+                for transcribed in transcribed_segments:
+                    # WhisperX segments already have word-level timestamps inside if needed
+                    # But for the block level, we match the text
+                    norm_trans = clean_text_for_alignment(transcribed['text'])
+                    ratio = difflib.SequenceMatcher(None, expected_text, norm_trans).ratio()
+
+                    if ratio > highest_ratio:
+                        highest_ratio = ratio
+                        best_match = transcribed
+
+                if best_match and highest_ratio > 0.4:
+                    aligned_results.append({
+                        'original': expected,
+                        'aligned': {
+                            'start': float(best_match['start']),
+                            'end': float(best_match['end']),
+                            'text': best_match['text'],
+                            'confidence': float(highest_ratio),
+                            'words': best_match.get('words', [])
+                        }
+                    })
+                else:
+                    aligned_results.append({'original': expected, 'aligned': None})
+
+            # Handle sequential gaps if necessary (same logic as whisper_aligner)
+            self._fill_gaps(aligned_results, len(audio) / 16000.0)
+
+            return aligned_results
+
+        except Exception as e:
+            logger.error(f"WhisperX alignment error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return [{'original': s, 'aligned': None} for s in expected_segments]
+
+    def _fill_gaps(self, aligned_results, total_duration):
+        """Sequential interpolation for missing segments"""
+        for i in range(len(aligned_results)):
+            if aligned_results[i]['aligned'] is not None:
+                continue
+
+            gap_start = 0.0
+            gap_end = total_duration
+
+            for j in range(i - 1, -1, -1):
+                if aligned_results[j]['aligned']:
+                    gap_start = aligned_results[j]['aligned']['end']
+                    break
+
+            for j in range(i + 1, len(aligned_results)):
+                if aligned_results[j]['aligned']:
+                    gap_end = aligned_results[j]['aligned']['start']
+                    break
+
+            low_bound_idx = -1
+            for j in range(i - 1, -1, -1):
+                if aligned_results[j]['aligned']:
+                    low_bound_idx = j
+                    break
+
+            high_bound_idx = len(aligned_results)
+            for j in range(i + 1, len(aligned_results)):
+                if aligned_results[j]['aligned']:
+                    high_bound_idx = j
+                    break
+
+            gap_count = high_bound_idx - low_bound_idx - 1
+            my_pos = i - low_bound_idx
+            gap_dur = max(0.1, gap_end - gap_start)
+            chunk_dur = gap_dur / max(1, gap_count)
+
+            est_start = gap_start + (my_pos - 1) * chunk_dur
+            est_end = est_start + chunk_dur
+
+            aligned_results[i]['aligned'] = {
+                'start': est_start,
+                'end': est_end,
+                'text': "[Estimated Position]",
+                'confidence': 0.0
+            }

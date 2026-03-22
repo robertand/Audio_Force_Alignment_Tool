@@ -61,6 +61,7 @@ jobs_lock = threading.Lock()
 # Lazy-loaded aligners with GPU support
 _whisper_aligner = None
 _mms_aligner = None
+_whisperx_aligner = None
 aligner_lock = threading.Lock()
 
 def get_whisper_aligner(model_name="base"):
@@ -88,6 +89,20 @@ def get_mms_aligner():
                 logger.error(f"Failed to load MMS aligner: {e}")
                 return None
         return _mms_aligner
+
+def get_whisperx_aligner(model_name="TransferRapid/whisper-large-v3-turbo_ro"):
+    global _whisperx_aligner
+    with aligner_lock:
+        if _whisperx_aligner is None:
+            try:
+                from utils.whisperx_aligner import WhisperXAligner
+                _whisperx_aligner = WhisperXAligner(model_name=model_name, device=device)
+            except Exception as e:
+                logger.error(f"Failed to load WhisperX aligner: {e}")
+                return None
+        else:
+            _whisperx_aligner.ensure_model(model_name)
+        return _whisperx_aligner
 
 def cleanup_old_jobs():
     """Periodically remove jobs older than JOB_TIMEOUT"""
@@ -139,11 +154,15 @@ cleanup_thread.start()
 logger.info("Cleanup thread started")
 
 def background_alignment(job_id, segments, speakers_to_process, audio_files_info, 
-                        use_whisper, model_name, initial_prompt, use_mms=False):
+                        use_whisper, model_name, initial_prompt, use_mms=False, use_whisperx=False):
     """Background task for alignment processing"""
     try:
         aligner = None
-        if use_whisper:
+        if use_whisperx:
+            aligner = get_whisperx_aligner(model_name)
+            if aligner is None:
+                raise Exception("Failed to initialize WhisperX aligner")
+        elif use_whisper:
             aligner = get_whisper_aligner(model_name)
             if aligner is None:
                 raise Exception("Failed to initialize Whisper aligner")
@@ -448,10 +467,12 @@ def process_audio():
             }
 
         # Start background thread
+        use_whisperx = request.form.get('use_whisperx') == 'true'
+
         thread = threading.Thread(
             target=background_alignment,
             args=(job_id, segments, speakers_to_process, audio_files_info, 
-                  use_whisper, model_name, initial_prompt, use_mms)
+                  use_whisper, model_name, initial_prompt, use_mms, use_whisperx)
         )
         thread.daemon = True
         thread.start()

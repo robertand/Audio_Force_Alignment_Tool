@@ -12,3 +12,5 @@ scipy==1.10.1
 matplotlib==3.7.2
 whisper-timestamped==1.14.2
 transformers>=4.34
+whisperx
+faster-whisper
