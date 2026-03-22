@@ -1,197 +1,126 @@
 import torch
-from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
 import numpy as np
 import librosa
-import difflib
-from utils.text_utils import normalize_text, strip_diacritics
 import logging
+from ctc_forced_aligner import (
+    load_alignment_model,
+    generate_emissions,
+    preprocess_text,
+    get_alignments,
+    get_spans,
+    postprocess_results,
+)
 
 logger = logging.getLogger(__name__)
 
 class MMSDialogueAligner:
     def __init__(self, model_id="MahmoudAshraf/mms-300m-1130-forced-aligner", device=None):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        logger.info(f"Loading MMS aligner on {self.device}")
+        self.model_id = model_id
+        logger.info(f"Loading MMS aligner model {model_id} on {self.device}")
         
-        # Load model and processor
-        self.processor = Wav2Vec2Processor.from_pretrained(model_id)
-        self.model = Wav2Vec2ForCTC.from_pretrained(model_id)
-        
-        # Move to GPU if available
-        if self.device == "cuda":
-            self.model = self.model.to(self.device)
-            # Use mixed precision for faster inference
-            self.model = self.model.half() if torch.cuda.get_device_capability()[0] >= 7 else self.model
-        
+        self.alignment_model, self.alignment_tokenizer = load_alignment_model(
+            self.device,
+            model_path=model_id,
+            dtype=torch.float16 if self.device == "cuda" else torch.float32,
+        )
         self.target_sr = 16000
-        
-        # Alignment parameters
-        self.search_window_sec = 60.0
-        self.overlap_sec = 3.0
-        self.min_confidence = 0.35
 
-    def align_character_audio(self, audio_path, expected_segments, language="ron", **kwargs):
+    def align_character_audio(self, audio_path, expected_segments, language="ro", **kwargs):
         """
-        Align audio with expected segments using MMS model with Segmented Local Alignment.
+        Align audio with expected segments using ctc-forced-aligner logic.
         """
-        # Mapping common lang codes
+        # Mapping common lang codes to ISO 639-3
         lang_map = {
             'ro': 'ron',
             'ron': 'ron',
             'en': 'eng',
             'eng': 'eng'
         }
-        language = lang_map.get(language, language)
+        iso_language = lang_map.get(language, language)
 
-        # Load audio
-        audio, sr = librosa.load(audio_path, sr=self.target_sr)
-        total_audio_duration = len(audio) / self.target_sr
+        try:
+            # 1. Load and process full audio using librosa
+            audio, sr = librosa.load(audio_path, sr=self.target_sr)
+            # Ensure 1D then move to torch
+            audio_waveform = torch.from_numpy(audio).to(self.alignment_model.dtype).to(self.alignment_model.device)
+            total_duration = len(audio) / self.target_sr
 
-        aligned_results = []
-        current_audio_ptr = 0.0  # Time in seconds in the input audio file
+            # 2. Concatenate all text for global alignment
+            texts = [s.get('text_ro', '').strip() for s in expected_segments]
+            full_text = " ".join(texts)
 
-        for expected in expected_segments:
-            expected_text = expected.get('text_ro', '').strip()
-            expected_duration = expected['end'] - expected['start']
+            if not full_text:
+                return [{'original': s, 'aligned': None} for s in expected_segments]
 
-            if not expected_text:
-                start = min(current_audio_ptr, total_audio_duration)
-                end = min(current_audio_ptr + expected_duration, total_audio_duration)
-                aligned_results.append({
-                    'original': expected,
-                    'aligned': {
-                        'start': start, 
-                        'end': end, 
-                        'text': "", 
-                        'confidence': 1.0
-                    }
-                })
-                current_audio_ptr = end
-                continue
-
-            # Search locally in the chunk
-            search_start_time = max(0.0, current_audio_ptr - self.overlap_sec)
-            search_end_time = min(
-                total_audio_duration, 
-                search_start_time + self.search_window_sec
+            # 3. Generate emissions
+            emissions, stride = generate_emissions(
+                self.alignment_model, audio_waveform, batch_size=16
             )
 
-            start_sample = int(search_start_time * self.target_sr)
-            end_sample = int(search_end_time * self.target_sr)
-            chunk = audio[start_sample:end_sample]
+            # 4. Preprocess text
+            # We use romanize=True as MMS models expect specific vocabulary
+            tokens_starred, text_starred = preprocess_text(
+                full_text, romanize=True, language=iso_language,
+            )
 
-            best_match = None
-            highest_ratio = 0.0
+            # Filter tokens to only include those in the tokenizer's vocabulary to avoid ValueError
+            vocab = self.alignment_tokenizer.get_vocab()
+            tokens_starred = [t if t in vocab else self.alignment_tokenizer.unk_token for t in tokens_starred]
 
-            if len(chunk) >= self.target_sr:  # At least 1 second
-                # Select language for MMS
-                if hasattr(self.processor.tokenizer, 'set_target_lang'):
-                    try:
-                        self.processor.tokenizer.set_target_lang(language)
-                    except Exception as e:
-                        logger.warning(f"Failed to set target language {language}: {e}")
+            # 5. Get alignments
+            segments, scores, blank_token = get_alignments(
+                emissions, tokens_starred, self.alignment_tokenizer,
+            )
 
-                # Process with GPU
-                inputs = self.processor(
-                    chunk, 
-                    sampling_rate=self.target_sr, 
-                    return_tensors="pt"
-                )
-                
-                # Move inputs to same device as model
-                inputs = {k: v.to(self.device) for k, v in inputs.items()}
-                
-                with torch.no_grad():
-                    if self.device == "cuda" and hasattr(self.model, 'half'):
-                        # Use mixed precision
-                        with torch.cuda.amp.autocast():
-                            logits = self.model(**inputs).logits[0]
-                    else:
-                        logits = self.model(**inputs).logits[0]
+            # 6. Get spans
+            spans = get_spans(tokens_starred, segments, blank_token)
 
-                # Get predictions
-                predicted_ids = torch.argmax(logits, dim=-1)
-                tokens = self.processor.tokenizer.convert_ids_to_tokens(
-                    predicted_ids.cpu().tolist()
-                )
+            # 7. Postprocess to get word timestamps
+            word_timestamps = postprocess_results(text_starred, spans, stride, scores)
 
-                # Extract segments
-                local_segments = self._extract_segments(
-                    tokens, 
-                    logits.shape[0], 
-                    len(chunk), 
-                    search_start_time
-                )
+            # 8. Map word timestamps back to expected segments
+            aligned_results = []
+            word_idx = 0
 
-                # Find best match
-                norm_expected = normalize_text(expected_text)
-                strip_expected = strip_diacritics(norm_expected)
+            for expected in expected_segments:
+                expected_text = expected.get('text_ro', '').strip()
+                if not expected_text:
+                    aligned_results.append({'original': expected, 'aligned': None})
+                    continue
 
-                for seg in local_segments:
-                    norm_trans = normalize_text(seg['text'])
-                    ratio = difflib.SequenceMatcher(
-                        None, norm_expected, norm_trans
-                    ).ratio()
+                # Count words in this segment
+                expected_words = expected_text.split()
+                num_words = len(expected_words)
+
+                # Find corresponding words in global alignment
+                segment_words = word_timestamps[word_idx : word_idx + num_words]
+
+                if segment_words:
+                    start_time = segment_words[0]['start']
+                    end_time = segment_words[-1]['end']
                     
-                    strip_ratio = difflib.SequenceMatcher(
-                        None, strip_expected, strip_diacritics(norm_trans)
-                    ).ratio()
+                    # Calculate average confidence for the segment
+                    conf = np.mean([w.get('score', 0.0) for w in segment_words])
                     
-                    combined_ratio = max(ratio, strip_ratio * 0.9)
+                    aligned_results.append({
+                        'original': expected,
+                        'aligned': {
+                            'start': float(start_time),
+                            'end': float(end_time),
+                            'text': " ".join([w['text'] for w in segment_words]),
+                            'confidence': float(conf)
+                        }
+                    })
+                    word_idx += num_words
+                else:
+                    aligned_results.append({'original': expected, 'aligned': None})
 
-                    if combined_ratio > highest_ratio:
-                        highest_ratio = combined_ratio
-                        best_match = seg
+            return aligned_results
 
-            # Results and fallback logic
-            if highest_ratio >= self.min_confidence and best_match:
-                aligned_results.append({
-                    'original': expected,
-                    'aligned': {
-                        'start': best_match['start'],
-                        'end': best_match['end'],
-                        'text': best_match['text'],
-                        'confidence': highest_ratio
-                    }
-                })
-                current_audio_ptr = best_match['end']
-            else:
-                # Fallback: Use expected duration from current position
-                start = min(current_audio_ptr, total_audio_duration)
-                end = min(current_audio_ptr + expected_duration, total_audio_duration)
-                aligned_results.append({
-                    'original': expected,
-                    'aligned': {
-                        'start': start, 
-                        'end': end, 
-                        'text': "", 
-                        'confidence': 0.0
-                    }
-                })
-                current_audio_ptr = end
-
-        return aligned_results
-
-    def _extract_segments(self, tokens, num_frames, chunk_length, base_time):
-        """Extract word segments from token sequence"""
-        segments = []
-        curr_text = ""
-        curr_start = 0.0
-        chunk_duration = chunk_length / self.target_sr
-
-        for i, token in enumerate(tokens):
-            if token != self.processor.tokenizer.pad_token:
-                if not curr_text:
-                    curr_start = (i / num_frames) * chunk_duration
-                curr_text += token.replace("|", " ")
-            
-            if (token == "|" or i == len(tokens) - 1) and curr_text:
-                curr_end = (i / num_frames) * chunk_duration
-                segments.append({
-                    'start': base_time + curr_start,
-                    'end': base_time + curr_end,
-                    'text': curr_text.strip()
-                })
-                curr_text = ""
-
-        return segments
+        except Exception as e:
+            logger.error(f"MMS Alignment failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            # Return empty alignments on error
+            return [{'original': seg, 'aligned': None} for seg in expected_segments]
