@@ -30,10 +30,19 @@ class MMSDialogueAligner:
         self.overlap_sec = 3.0
         self.min_confidence = 0.35
 
-    def align_character_audio(self, audio_path, expected_segments, language="ron"):
+    def align_character_audio(self, audio_path, expected_segments, language="ron", **kwargs):
         """
         Align audio with expected segments using MMS model with Segmented Local Alignment.
         """
+        # Mapping common lang codes
+        lang_map = {
+            'ro': 'ron',
+            'ron': 'ron',
+            'en': 'eng',
+            'eng': 'eng'
+        }
+        language = lang_map.get(language, language)
+
         # Load audio
         audio, sr = librosa.load(audio_path, sr=self.target_sr)
         total_audio_duration = len(audio) / self.target_sr
@@ -75,6 +84,13 @@ class MMSDialogueAligner:
             highest_ratio = 0.0
 
             if len(chunk) >= self.target_sr:  # At least 1 second
+                # Select language for MMS
+                if hasattr(self.processor.tokenizer, 'set_target_lang'):
+                    try:
+                        self.processor.tokenizer.set_target_lang(language)
+                    except Exception as e:
+                        logger.warning(f"Failed to set target language {language}: {e}")
+
                 # Process with GPU
                 inputs = self.processor(
                     chunk, 

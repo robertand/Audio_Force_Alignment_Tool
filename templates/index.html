@@ -585,8 +585,9 @@
 
             // Initialize Regions plugin
             const wsRegions = ws.registerPlugin(WaveSurfer.Regions.create());
+            ws.regions = wsRegions; // Store on ws for backward compatibility
 
-            waveforms[index] = { ws, wsRegions };
+            waveforms[index] = ws;
 
             ws.on('ready', () => {
                 updateView();
@@ -709,7 +710,7 @@
                 audio.play();
 
                 // Sync waveform progress
-                const { ws } = waveforms[index];
+                const ws = waveforms[index];
                 const duration = (end - start) / tempo;
 
                 const progressInterval = setInterval(() => {
