@@ -149,13 +149,16 @@
                                 <div>
                                     <label class="block text-sm font-medium mb-1">Whisper Model</label>
                                     <select id="whisperModel" class="w-full border rounded-lg px-3 py-2">
-                                        <optgroup label="WhisperX / Romanian Optimized">
-                                            <option value="TransferRapid/whisper-large-v3-turbo_ro" selected>RO Turbo (Large v3 fine-tuned)</option>
+                                        <optgroup label="Recommended for WhisperX">
+                                            <option value="large-v3" selected>OpenAI Large v3 (Best for Align)</option>
+                                            <option value="medium">Medium</option>
+                                        </optgroup>
+                                        <optgroup label="Romanian Fine-tuned (Standard Whisper only)">
+                                            <option value="TransferRapid/whisper-large-v3-turbo_ro">RO Turbo (Large v3 fine-tuned)</option>
                                             <option value="iRaduS/whisper-romanian-finetune">RO Finetune (iRaduS)</option>
                                         </optgroup>
-                                        <optgroup label="Standard Models">
-                                            <option value="large-v3">OpenAI Large v3</option>
-                                            <option value="medium">Medium</option>
+                                        <optgroup label="Other Standard Models">
+                                            <option value="large-v2">OpenAI Large v2</option>
                                             <option value="small">Small</option>
                                             <option value="base">Base</option>
                                             <option value="tiny">Tiny</option>

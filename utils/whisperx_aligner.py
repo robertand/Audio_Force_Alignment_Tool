@@ -9,13 +9,22 @@ from typing import List, Dict, Any
 logger = logging.getLogger(__name__)
 
 class WhisperXAligner:
-    def __init__(self, model_name="TransferRapid/whisper-large-v3-turbo_ro", device=None, compute_type=None):
+    def __init__(self, model_name="large-v3", device=None, compute_type=None):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.compute_type = compute_type or ("float16" if self.device == "cuda" else "int8")
         self.current_model_name = model_name
 
         logger.info(f"Loading WhisperX model {model_name} on {self.device} ({self.compute_type})")
-        self.model = whisperx.load_model(model_name, device=self.device, compute_type=self.compute_type)
+        try:
+            self.model = whisperx.load_model(model_name, device=self.device, compute_type=self.compute_type)
+        except Exception as e:
+            logger.error(f"Failed to load WhisperX model {model_name}: {e}")
+            if "model.bin" in str(e):
+                logger.warning("This model might not be in CTranslate2 format. Falling back to 'large-v3'")
+                self.model = whisperx.load_model("large-v3", device=self.device, compute_type=self.compute_type)
+                self.current_model_name = "large-v3"
+            else:
+                raise e
 
         # Cache for alignment models
         self.align_models = {}
@@ -24,12 +33,22 @@ class WhisperXAligner:
         if model_name != self.current_model_name:
             logger.info(f"Switching WhisperX model to {model_name}")
             # Free memory
-            del self.model
-            if self.device == "cuda":
-                torch.cuda.empty_cache()
+            if hasattr(self, 'model'):
+                del self.model
+                if self.device == "cuda":
+                    torch.cuda.empty_cache()
 
-            self.model = whisperx.load_model(model_name, device=self.device, compute_type=self.compute_type)
-            self.current_model_name = model_name
+            try:
+                self.model = whisperx.load_model(model_name, device=self.device, compute_type=self.compute_type)
+                self.current_model_name = model_name
+            except Exception as e:
+                logger.error(f"Failed to switch WhisperX model to {model_name}: {e}")
+                if "model.bin" in str(e):
+                    logger.warning("Falling back to 'large-v3' due to CT2 incompatibility")
+                    self.model = whisperx.load_model("large-v3", device=self.device, compute_type=self.compute_type)
+                    self.current_model_name = "large-v3"
+                else:
+                    raise e
 
     def align_character_audio(self, audio_path: str, expected_segments: List[Dict],
                               language="ro", initial_prompt=None, **kwargs):
