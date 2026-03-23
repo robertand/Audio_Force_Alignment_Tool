@@ -723,20 +723,22 @@ def realign_segments():
 
         # Initialize Aligner (default to WhisperX if available, or Whisper)
         use_whisperx = job['metadata'].get('use_whisperx', False)
+        use_whisper = job['metadata'].get('use_whisper', False)
         model_name = job['metadata'].get('model', 'base')
 
         aligner = None
         if use_whisperx:
-            from utils.whisperx_aligner import WhisperXAligner
-            aligner = WhisperXAligner(model_name=model_name, device=device)
-        else:
-            from utils.whisper_aligner import DialogueAligner
-            aligner = DialogueAligner(model_name=model_name, device=device)
+            aligner = get_whisperx_aligner(model_name)
+        elif use_whisper:
+            aligner = get_whisper_aligner(model_name)
+
+        if aligner is None:
+            return jsonify({'success': False, 'error': 'Aligner not available'}), 500
 
         # Re-align with offset
         new_alignments = aligner.align_character_audio(
             audio_path, expected_segments,
-            language="ro",
+            language="ro", # Currently UI only supports Romanian-optimized alignment
             offset_time=offset_time
         )
 

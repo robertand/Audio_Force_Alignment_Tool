@@ -32,15 +32,40 @@
         }
 
         .wavesurfer-region-handle {
-            width: 4px !important;
-            max-width: 4px !important;
+            width: 6px !important;
+            max-width: 6px !important;
             background-color: #ef4444 !important;
             opacity: 1 !important;
+            z-index: 10 !important;
         }
 
         .wavesurfer-region-handle:hover {
             background-color: #dc2626 !important;
             cursor: col-resize;
+        }
+
+        .wavesurfer-region-handle-left::before {
+            content: 'IN';
+            position: absolute;
+            top: 0;
+            left: 8px;
+            font-size: 9px;
+            font-weight: bold;
+            color: #ef4444;
+            pointer-events: none;
+            white-space: nowrap;
+        }
+
+        .wavesurfer-region-handle-right::before {
+            content: 'OUT';
+            position: absolute;
+            bottom: 0;
+            right: 8px;
+            font-size: 9px;
+            font-weight: bold;
+            color: #ef4444;
+            pointer-events: none;
+            white-space: nowrap;
         }
     </style>
 </head>
@@ -602,6 +627,8 @@
             waveforms[index] = ws;
 
             ws.on('ready', () => {
+                const s = parseFloat(block.querySelector('.source-start').value);
+                ws.setTime(s);
                 updateView();
             });
 
@@ -651,13 +678,22 @@
                     const viewEnd = Math.min(speakerData.duration, e + padding);
                     const viewDuration = viewEnd - viewStart;
 
-                    ws.zoom(container.clientWidth / viewDuration);
+                    // Force a minimum width to ensure zoom calculation is stable
+                    const containerWidth = container.clientWidth || 800;
+                    const minPxPerSec = containerWidth / viewDuration;
+
+                    ws.zoom(minPxPerSec);
 
                     // Use setTimeout to ensure zoom is applied before scrolling
                     setTimeout(() => {
-                        const scrollPos = viewStart * (container.scrollWidth / speakerData.duration);
-                        container.scrollLeft = scrollPos;
-                    }, 0);
+                        // WaveSurfer 7 structure: ws.container contains the shadow root or the scrollable element
+                        // We can calculate the scroll position based on the duration
+                        const scrollable = container.querySelector('div'); // WaveSurfer 7 main scrollable div
+                        if (scrollable) {
+                            const scrollPos = viewStart * (scrollable.scrollWidth / speakerData.duration);
+                            scrollable.scrollLeft = scrollPos;
+                        }
+                    }, 50);
                 }
 
                 // Update Delta Label
@@ -725,14 +761,11 @@
                 const ws = waveforms[index];
                 const duration = (end - start) / tempo;
 
-                const progressInterval = setInterval(() => {
-                    if (activeAudio !== audio || audio.paused) {
-                        clearInterval(progressInterval);
-                        return;
+                audio.ontimeupdate = () => {
+                    if (activeAudio === audio && !audio.paused) {
+                        ws.setTime(audio.currentTime);
                     }
-                    // Use audio.currentTime for exact position
-                    ws.setTime(audio.currentTime);
-                }, 50);
+                };
 
                 setTimeout(() => {
                     if (activeAudio === audio) {
