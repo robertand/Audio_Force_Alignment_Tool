@@ -553,7 +553,10 @@
                             <div class="flex space-x-2 items-center">
                                 <label class="text-gray-500">Tempo:</label>
                                 <input type="number" step="0.01" min="0.5" max="2.0" class="w-14 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center tempo" value="1.00">
-                                <span class="text-xs text-gray-400">x</span>
+                                <span class="text-xs text-gray-400 mr-2">x</span>
+                                <button onclick="realignFromHere('${seg.speaker}', ${index})" class="text-indigo-600 hover:text-indigo-800 transition-colors" title="Re-align all following segments from this point">
+                                    <i class="fas fa-sync-alt"></i>
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -977,6 +980,55 @@
                 });
 
                 if (activeAudio === null) break; // Interrupted
+            }
+        }
+
+        async function realignFromHere(speaker, index) {
+            // Find start index within speaker's segments
+            const speakerResults = jobAlignmentResults.filter(r => r.speaker === speaker);
+            // We need to find the relative index for this speaker
+            let speakerIdx = -1;
+            let currentRelativeIdx = 0;
+            jobAlignmentResults.forEach((r, i) => {
+                if (r.speaker === speaker) {
+                    if (i === index) {
+                        speakerIdx = currentRelativeIdx;
+                    }
+                    currentRelativeIdx++;
+                }
+            });
+
+            if (speakerIdx === -1) return;
+
+            // Offset is the source_end of the current segment
+            const block = document.getElementById(`seg-${index}`);
+            const offsetTime = parseFloat(block.querySelector('.source-end').value);
+
+            showToast('Re-aligning following segments...', 'info');
+
+            try {
+                const response = await fetch('/api/realign', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        job_id: currentJobId,
+                        speaker: speaker,
+                        start_index: speakerIdx + 1, // Start from the NEXT segment
+                        offset_time: offsetTime
+                    })
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    jobAlignmentResults = result.results;
+                    // Refresh Step 3 view
+                    showStep3(result.results);
+                    showToast('Re-alignment completed!', 'success');
+                } else {
+                    showToast('Re-alignment failed: ' + result.error, 'error');
+                }
+            } catch (error) {
+                showToast('Error during re-alignment: ' + error.message, 'error');
             }
         }
 

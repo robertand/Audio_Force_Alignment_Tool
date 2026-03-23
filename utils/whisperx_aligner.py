@@ -51,15 +51,25 @@ class WhisperXAligner:
                     raise e
 
     def align_character_audio(self, audio_path: str, expected_segments: List[Dict],
-                              language="ro", initial_prompt=None, **kwargs):
+                              language="ro", initial_prompt=None, offset_time=0.0, **kwargs):
         """
         Transcribe and align using WhisperX for ultra-exact timestamps.
         """
         from utils.text_utils import clean_text_for_alignment
 
+        # Mapping common lang codes
+        lang_map = {'ro': 'ro', 'ron': 'ro', 'en': 'en', 'eng': 'en'}
+        language = lang_map.get(language, language)
+
         try:
             # 1. Load audio
-            audio = whisperx.load_audio(audio_path)
+            import librosa
+            audio, sr = librosa.load(audio_path, sr=16000)
+
+            if offset_time > 0:
+                # Ensure we don't slice past the end
+                start_sample = min(int(offset_time * sr), len(audio) - 1)
+                audio = audio[start_sample:]
 
             # 2. Initial Transcription
             logger.info(f"Transcribing {audio_path} with WhisperX (Initial Prompt: {initial_prompt})...")
@@ -127,8 +137,8 @@ class WhisperXAligner:
                     aligned_results.append({
                         'original': expected,
                         'aligned': {
-                            'start': float(best_match['start']),
-                            'end': float(best_match['end']),
+                            'start': float(best_match['start']) + offset_time,
+                            'end': float(best_match['end']) + offset_time,
                             'text': best_match['text'],
                             'confidence': float(highest_ratio),
                             'words': best_match.get('words', [])
@@ -138,7 +148,8 @@ class WhisperXAligner:
                     aligned_results.append({'original': expected, 'aligned': None})
 
             # Handle sequential gaps if necessary (same logic as whisper_aligner)
-            self._fill_gaps(aligned_results, len(audio) / 16000.0)
+            full_audio_duration = (len(audio) / 16000.0) + offset_time
+            self._fill_gaps(aligned_results, full_audio_duration)
 
             return aligned_results
 

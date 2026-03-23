@@ -52,8 +52,9 @@ def clean_text_for_alignment(text):
     text = re.sub(r'\[.*?\]', '', text)
 
     # 2. Remove Speaker: prefix (if it's at the start and followed by text)
-    # Match strings like "Name: " or "Character Name: "
-    text = re.sub(r'^[A-Za-z\s]+:\s*', '', text)
+    # Match strings like "Name: ", "Character Name: ", or "Nume: " (including Romanian chars)
+    # This handles "Gion: " or "Garfild: "
+    text = re.sub(r'^[^:\n\[\]]+:\s*', '', text)
 
     # 3. Standard normalization
     text = normalize_text(text)

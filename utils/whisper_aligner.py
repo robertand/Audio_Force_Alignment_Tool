@@ -21,7 +21,7 @@ class DialogueAligner:
 
     def align_character_audio(self, audio_path, expected_segments, language="ro", 
                               initial_prompt=None, model_name=None, 
-                              min_confidence=0.4, use_word_timestamps=True):
+                              min_confidence=0.4, use_word_timestamps=True, offset_time=0.0, **kwargs):
         """
         Transcribe audio and align with expected segments from metadata
         """
@@ -35,6 +35,10 @@ class DialogueAligner:
             import librosa
             audio, sr = librosa.load(audio_path, sr=16000)
             
+            if offset_time > 0:
+                # Slice audio to start from offset
+                audio = audio[int(offset_time * sr):]
+
             # Move to GPU if available
             if self.device == "cuda":
                 audio = torch.from_numpy(audio).to(self.device)
@@ -76,8 +80,8 @@ class DialogueAligner:
                     aligned_results.append({
                         'original': expected,
                         'aligned': {
-                            'start': best_match['start'],
-                            'end': best_match['end'],
+                            'start': best_match['start'] + offset_time,
+                            'end': best_match['end'] + offset_time,
                             'text': best_match['text'],
                             'confidence': highest_ratio,
                             'words': best_match.get('words', [])
@@ -121,8 +125,8 @@ class DialogueAligner:
 
                 if best_local_match and highest_local_ratio >= 0.3:
                     aligned_results[i]['aligned'] = {
-                        'start': best_local_match['start'],
-                        'end': best_local_match['end'],
+                        'start': best_local_match['start'] + offset_time,
+                        'end': best_local_match['end'] + offset_time,
                         'text': best_local_match['text'],
                         'confidence': highest_local_ratio,
                         'words': best_local_match.get('words', [])
