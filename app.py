@@ -399,6 +399,7 @@ def process_audio():
         # Get metadata and settings
         segments = json.loads(request.form.get('segments', '[]'))
         use_whisper = request.form.get('use_whisper') == 'true'
+        use_whisperx = request.form.get('use_whisperx') == 'true'
         use_mms = request.form.get('use_mms') == 'true'
         speakers_to_process = request.form.getlist('speakers')
         model_name = request.form.get('whisper_model', 'base')
@@ -464,8 +465,6 @@ def process_audio():
             }
 
         # Start background thread
-        use_whisperx = request.form.get('use_whisperx') == 'true'
-
         thread = threading.Thread(
             target=background_alignment,
             args=(job_id, segments, speakers_to_process, audio_files_info, 

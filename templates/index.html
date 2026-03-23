@@ -32,11 +32,12 @@
         }
 
         .wavesurfer-region-handle {
-            width: 8px !important;
-            max-width: 8px !important;
+            width: 14px !important;
+            max-width: 14px !important;
             background-color: #ef4444 !important;
             opacity: 1 !important;
             z-index: 100 !important;
+            border: 1px solid white !important;
         }
 
         .wavesurfer-region-handle:hover {
@@ -48,10 +49,11 @@
             content: 'IN';
             position: absolute;
             top: 0;
-            left: 8px;
-            font-size: 9px;
-            font-weight: bold;
-            color: #ef4444;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 8px;
+            font-weight: 900;
+            color: white;
             pointer-events: none;
             white-space: nowrap;
         }
@@ -60,10 +62,11 @@
             content: 'OUT';
             position: absolute;
             bottom: 0;
-            right: 8px;
-            font-size: 9px;
-            font-weight: bold;
-            color: #ef4444;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 8px;
+            font-weight: 900;
+            color: white;
             pointer-events: none;
             white-space: nowrap;
         }
@@ -578,7 +581,7 @@
                             </div>
                             <div class="flex space-x-2 items-center">
                                 <label class="text-gray-500">Tempo:</label>
-                                <input type="number" step="0.01" min="0.5" max="2.0" class="w-14 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center tempo" value="1.00">
+                                <input type="number" step="0.01" min="0.5" max="2.0" class="w-14 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center tempo" value="${seg.tempo || '1.00'}">
                                 <span class="text-xs text-gray-400 mr-2">x</span>
                                 <button onclick="realignFromHere('${seg.speaker}', ${index}, this)" class="text-indigo-600 hover:text-indigo-800 transition-colors" title="Re-align all following segments from this point">
                                     <i class="fas fa-sync-alt"></i>
@@ -687,12 +690,25 @@
 
                     // Use setTimeout to ensure zoom is applied before scrolling
                     setTimeout(() => {
-                        // WaveSurfer 7 structure: ws.getWrapper() gives the scrollable container
+                        // WaveSurfer 7: the container itself might have overflow-x: auto
+                        // or it might be an internal div. ws.getWrapper() is the canvas container.
                         const wrapper = ws.getWrapper();
-                        if (wrapper && wrapper.parentElement) {
-                            const scrollable = wrapper.parentElement;
-                            const scrollPos = viewStart * (wrapper.scrollWidth / speakerData.duration);
-                            scrollable.scrollLeft = scrollPos;
+                        if (wrapper) {
+                            // Find the first scrollable parent
+                            let scrollable = wrapper;
+                            while (scrollable && scrollable !== container) {
+                                if (window.getComputedStyle(scrollable).overflowX === 'auto' ||
+                                    window.getComputedStyle(scrollable).overflowX === 'scroll' ||
+                                    scrollable.scrollWidth > scrollable.clientWidth) {
+                                    break;
+                                }
+                                scrollable = scrollable.parentElement;
+                            }
+
+                            if (scrollable) {
+                                const scrollPos = viewStart * (wrapper.scrollWidth / speakerData.duration);
+                                scrollable.scrollLeft = scrollPos;
+                            }
                         }
                     }, 50);
                 }
@@ -1034,9 +1050,19 @@
 
             if (speakerIdx === -1) return;
 
-            // Offset is the source_end of the current segment
-            const block = document.getElementById(`seg-${index}`);
-            const offsetTime = parseFloat(block.querySelector('.source-end').value);
+            // Offset is the source_end of the segment PRECEDING the current one
+            // If it's the first segment for this speaker, offset is 0
+            let offsetTime = 0;
+            if (speakerIdx > 0) {
+                // We need to find the actual block for the preceding speaker segment
+                const precedingSpeakerSeg = speakerResults[speakerIdx - 1];
+                // Find global index of precedingSpeakerSeg
+                const globalIdx = jobAlignmentResults.findIndex(r => r === precedingSpeakerSeg);
+                const prevBlock = document.getElementById(`seg-${globalIdx}`);
+                if (prevBlock) {
+                    offsetTime = parseFloat(prevBlock.querySelector('.source-end').value);
+                }
+            }
 
             // Collect all current adjustments to preserve them
             const currentAlignments = Array.from(document.querySelectorAll('#segmentList > div')).map(el => ({
@@ -1057,8 +1083,8 @@
                     body: JSON.stringify({
                         job_id: currentJobId,
                         speaker: speaker,
-                        start_index: speakerIdx + 1, // Start from the NEXT segment
-                        offset_time: offsetTime,
+                        start_index: speakerIdx, // Start FROM the selected segment
+                        offset_time: offsetTime, // Note: backend uses this as starting point for text batch
                         current_alignments: currentAlignments
                     })
                 });
