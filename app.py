@@ -69,12 +69,16 @@ def get_whisper_aligner(model_name="base"):
         if _whisper_aligner is None:
             try:
                 from utils.whisper_aligner import DialogueAligner
+                logger.info(f"💾 Loading initial Whisper model: {model_name}")
                 _whisper_aligner = DialogueAligner(model_name=model_name, device=device)
             except Exception as e:
                 logger.error(f"Failed to load Whisper aligner: {e}")
                 return None
         elif _whisper_aligner.current_model_name != model_name:
-            _whisper_aligner.ensure_model(model_name, device)
+            logger.info(f"💾 Switching cached Whisper model from {_whisper_aligner.current_model_name} to {model_name}")
+            _whisper_aligner.ensure_model(model_name)
+        else:
+            logger.info(f"💾 Reusing cached Whisper model: {model_name}")
         return _whisper_aligner
 
 def get_whisperx_aligner(model_name="TransferRapid/whisper-large-v3-turbo_ro"):
@@ -83,12 +87,17 @@ def get_whisperx_aligner(model_name="TransferRapid/whisper-large-v3-turbo_ro"):
         if _whisperx_aligner is None:
             try:
                 from utils.whisperx_aligner import WhisperXAligner
+                logger.info(f"💾 Loading initial WhisperX model: {model_name}")
                 _whisperx_aligner = WhisperXAligner(model_name=model_name, device=device)
             except Exception as e:
                 logger.error(f"Failed to load WhisperX aligner: {e}")
                 return None
         else:
-            _whisperx_aligner.ensure_model(model_name)
+            if _whisperx_aligner.current_model_name != model_name:
+                logger.info(f"💾 Switching cached WhisperX model from {_whisperx_aligner.current_model_name} to {model_name}")
+                _whisperx_aligner.ensure_model(model_name)
+            else:
+                logger.info(f"💾 Reusing cached WhisperX model: {model_name}")
         return _whisperx_aligner
 
 def cleanup_old_jobs():
@@ -140,7 +149,7 @@ cleanup_thread = threading.Thread(target=cleanup_old_jobs, daemon=True)
 cleanup_thread.start()
 logger.info("Cleanup thread started")
 
-def apply_alignment_post_processing(alignments, onsets):
+def apply_alignment_post_processing(alignments, onsets, preceding_end=None):
     """
     Apply common refinement rules to alignments:
     1. Silence Crop (Hump detection)
@@ -183,13 +192,16 @@ def apply_alignment_post_processing(alignments, onsets):
         aligned['end'] += 0.5
 
     # 4. Apply NO OVERLAP Rule
-    for i in range(1, len(alignments)):
-        prev = alignments[i-1].get('aligned')
+    for i in range(len(alignments)):
         curr = alignments[i].get('aligned')
+        if not curr: continue
 
-        if prev and curr:
-            if curr['start'] < prev['end'] + 0.05:
-                curr['start'] = prev['end'] + 0.05
+        # Compare with preceding end boundary
+        effective_prev_end = preceding_end if (i == 0) else (alignments[i-1].get('aligned')['end'] if alignments[i-1].get('aligned') else None)
+
+        if effective_prev_end is not None:
+            if curr['start'] < effective_prev_end + 0.05:
+                curr['start'] = effective_prev_end + 0.05
                 if curr['end'] <= curr['start']:
                     curr['end'] = curr['start'] + 0.1
 
@@ -444,8 +456,9 @@ def process_audio():
                 'metadata': {
                     'speakers': speakers_to_process,
                     'use_whisper': use_whisper,
+                    'use_whisperx': use_whisperx,
                     'use_mms': use_mms,
-                    'model': model_name if use_whisper else 'none',
+                    'model': model_name if (use_whisper or use_whisperx) else 'none',
                     'segment_count': len(segments)
                 }
             }
@@ -680,6 +693,7 @@ def realign_segments():
         speaker = data.get('speaker')
         start_index = data.get('start_index')
         offset_time = float(data.get('offset_time', 0.0))
+        current_alignments = data.get('current_alignments', [])
 
         if not job_id or not speaker or start_index is None:
             return jsonify({'success': False, 'error': 'Missing parameters'}), 400
@@ -689,18 +703,28 @@ def realign_segments():
             if not job:
                 return jsonify({'success': False, 'error': 'Job not found'}), 404
 
-            # Find all results for this speaker
-            all_results = job.get('results', [])
-            speaker_results = [r for r in all_results if r['speaker'] == speaker]
+            # 1. Update existing results with current UI state to preserve manual edits
+            if current_alignments:
+                for idx, adj in enumerate(current_alignments):
+                    if idx < len(job['results']):
+                        job['results'][idx].update({
+                            'source_start': adj['source_start'],
+                            'source_end': adj['source_end'],
+                            'tempo': adj['tempo']
+                        })
 
-            if start_index >= len(speaker_results):
+            # Find all results and their original indices for this speaker
+            all_results = job.get('results', [])
+            speaker_data = [(idx, r) for idx, r in enumerate(all_results) if r['speaker'] == speaker]
+
+            if start_index >= len(speaker_data):
                 return jsonify({'success': False, 'error': 'Invalid start index'}), 400
 
-            # Identify segments to re-align
-            segments_to_realign = speaker_results[start_index:]
+            # Identify segments and their indices to re-align
+            indices_to_update = [item[0] for item in speaker_data[start_index:]]
+            segments_to_realign = [item[1] for item in speaker_data[start_index:]]
 
             # Get original metadata for these segments
-            # We need to create expected_segments structure
             expected_segments = []
             for r in segments_to_realign:
                 expected_segments.append({
@@ -721,7 +745,7 @@ def realign_segments():
             if not audio_path:
                 return jsonify({'success': False, 'error': 'Audio not found'}), 404
 
-        # Initialize Aligner (default to WhisperX if available, or Whisper)
+        # Initialize Aligner (using singleton getters to keep model loaded)
         use_whisperx = job['metadata'].get('use_whisperx', False)
         use_whisper = job['metadata'].get('use_whisper', False)
         model_name = job['metadata'].get('model', 'base')
@@ -738,31 +762,25 @@ def realign_segments():
         # Re-align with offset
         new_alignments = aligner.align_character_audio(
             audio_path, expected_segments,
-            language="ro", # Currently UI only supports Romanian-optimized alignment
+            language="ro",
             offset_time=offset_time
         )
 
+        # Determine the preceding end boundary for the first segment in the batch
+        preceding_end = None
+        if start_index > 0:
+            preceding_end = speaker_data[start_index - 1][1].get('source_end')
+
         # Apply post-processing refinement to new alignments
-        # We need onsets for the speaker audio
         speaker_audio, speaker_sr = audio_processor.load_audio(audio_path)
         onsets = audio_processor.detect_onsets(speaker_audio, speaker_sr)
-        new_alignments = apply_alignment_post_processing(new_alignments, onsets)
+        new_alignments = apply_alignment_post_processing(new_alignments, onsets, preceding_end=preceding_end)
 
-        # Update job results
+        # Update job results with newly aligned segments using exact indices
         with jobs_lock:
-            # We need to map back the updated alignments to the main results list
-            # Find start_index in global results
-            global_start_idx = -1
-            found_count = 0
-            for idx, res in enumerate(all_results):
-                if res['speaker'] == speaker:
-                    if found_count == start_index:
-                        global_start_idx = idx
-                        break
-                    found_count += 1
-
-            if global_start_idx != -1:
-                for i, new_entry in enumerate(new_alignments):
+            for i, new_entry in enumerate(new_alignments):
+                if i < len(indices_to_update):
+                    global_idx = indices_to_update[i]
                     orig = new_entry['original']
                     aligned = new_entry.get('aligned')
 
@@ -772,13 +790,12 @@ def realign_segments():
                         'confidence': aligned.get('confidence', 0.0) if aligned else 0.0
                     }
 
-                    # Update global result object
-                    JOBS[job_id]['results'][global_start_idx + i].update(update_info)
+                    job['results'][global_idx].update(update_info)
 
         return jsonify({
             'success': True,
             'message': f'Re-aligned {len(new_alignments)} segments',
-            'results': JOBS[job_id]['results']
+            'results': job['results']
         })
 
     except Exception as e:

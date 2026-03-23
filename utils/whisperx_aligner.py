@@ -125,7 +125,10 @@ class WhisperXAligner:
 
                 for transcribed in transcribed_segments:
                     # WhisperX segments already have word-level timestamps inside if needed
-                    # But for the block level, we match the text
+                    # But for the block level, we match the text. Use global coordinates for matching.
+                    trans_start = float(transcribed['start']) + offset_time
+                    trans_end = float(transcribed['end']) + offset_time
+
                     norm_trans = clean_text_for_alignment(transcribed['text'])
                     ratio = difflib.SequenceMatcher(None, expected_text, norm_trans).ratio()
 
@@ -149,7 +152,7 @@ class WhisperXAligner:
 
             # Handle sequential gaps if necessary (same logic as whisper_aligner)
             full_audio_duration = (len(audio) / 16000.0) + offset_time
-            self._fill_gaps(aligned_results, full_audio_duration)
+            self._fill_gaps(aligned_results, full_audio_duration, offset_time=offset_time)
 
             return aligned_results
 
@@ -159,13 +162,13 @@ class WhisperXAligner:
             logger.error(traceback.format_exc())
             return [{'original': s, 'aligned': None} for s in expected_segments]
 
-    def _fill_gaps(self, aligned_results, total_duration):
+    def _fill_gaps(self, aligned_results, total_duration, offset_time=0.0):
         """Sequential interpolation for missing segments"""
         for i in range(len(aligned_results)):
             if aligned_results[i]['aligned'] is not None:
                 continue
 
-            gap_start = 0.0
+            gap_start = offset_time
             gap_end = total_duration
 
             for j in range(i - 1, -1, -1):

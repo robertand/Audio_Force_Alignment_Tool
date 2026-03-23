@@ -13,10 +13,17 @@ class DialogueAligner:
         logger.info(f"Loading Whisper {model_name} on {self.device}")
         self.model = whisper.load_model(model_name, device=self.device)
 
-    def ensure_model(self, model_name, device=None):
+    def ensure_model(self, model_name):
         if model_name != self.current_model_name:
-            logger.info(f"Switching to Whisper {model_name} on {device or self.device}")
-            self.model = whisper.load_model(model_name, device=device or self.device)
+            logger.info(f"Switching to Whisper {model_name} on {self.device}")
+
+            # Free memory
+            if hasattr(self, 'model'):
+                del self.model
+                if self.device == "cuda":
+                    torch.cuda.empty_cache()
+
+            self.model = whisper.load_model(model_name, device=self.device)
             self.current_model_name = model_name
 
     def align_character_audio(self, audio_path, expected_segments, language="ro", 
@@ -96,8 +103,9 @@ class DialogueAligner:
                     continue # Already anchored
 
                 # Determine valid gap window
-                gap_start = 0.0
-                gap_end = audio.shape[0] / 16000.0 # Full duration
+                # Start from offset_time if no preceding anchor is found
+                gap_start = offset_time
+                gap_end = (audio.shape[0] / 16000.0) + offset_time # Full duration relative to global timeline
 
                 # Look back for nearest preceding anchor
                 for j in range(i - 1, -1, -1):
@@ -116,8 +124,11 @@ class DialogueAligner:
                 highest_local_ratio = 0.0
 
                 for transcribed in transcribed_segments:
-                    # Match must be within the gap
-                    if transcribed['start'] >= gap_start - 0.2 and transcribed['end'] <= gap_end + 0.2:
+                    # Match must be within the gap. Use global coordinates.
+                    trans_start = transcribed['start'] + offset_time
+                    trans_end = transcribed['end'] + offset_time
+
+                    if trans_start >= gap_start - 0.2 and trans_end <= gap_end + 0.2:
                         ratio = difflib.SequenceMatcher(None, expected_text, self._normalize_text(transcribed['text'])).ratio()
                         if ratio > highest_local_ratio:
                             highest_local_ratio = ratio
