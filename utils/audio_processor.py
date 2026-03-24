@@ -4,6 +4,9 @@ import numpy as np
 import soundfile as sf
 import librosa
 from scipy import signal
+import logging
+
+logger = logging.getLogger(__name__)
 
 class AudioProcessor:
     def __init__(self, target_sr=16000):
@@ -13,18 +16,30 @@ class AudioProcessor:
     def load_audio(self, file_path):
         """Load audio file and resample if necessary"""
         try:
-            # Try torchaudio first
+            # Try torchaudio first (supports GPU)
             waveform, sr = torchaudio.load(file_path)
-            waveform = waveform.mean(dim=0).numpy()  # Convert to mono
+            
+            # Convert to mono if needed
+            if waveform.shape[0] > 1:
+                waveform = torch.mean(waveform, dim=0, keepdim=True)
+            
+            # Move to CPU for processing (or keep on GPU if needed)
+            if self.device == 'cuda':
+                waveform = waveform.cuda()
             
             if sr != self.target_sr:
-                # Resample using librosa
-                waveform = librosa.resample(waveform, orig_sr=sr, target_sr=self.target_sr)
+                # Resample using torchaudio (GPU accelerated if available)
+                resampler = torchaudio.transforms.Resample(sr, self.target_sr).to(waveform.device)
+                waveform = resampler(waveform)
                 sr = self.target_sr
-                
-        except Exception:
-            # Fallback to soundfile
+            
+            # Convert to numpy for compatibility
+            waveform = waveform.cpu().numpy().flatten()
+            
+        except Exception as e:
+            logger.warning(f"Torchaudio failed, falling back to soundfile: {e}")
             try:
+                # Fallback to soundfile
                 waveform, sr = sf.read(file_path)
                 if waveform is None:
                     raise Exception("Soundfile returned None")
@@ -38,12 +53,14 @@ class AudioProcessor:
             except Exception as e:
                 raise Exception(f"Failed to load audio file {file_path}: {str(e)}")
         
-        # Ensure waveform is not None before normalization
+        # Ensure waveform is not None
         if waveform is None:
             raise Exception(f"Failed to load audio from {file_path}")
 
         # Normalize
-        waveform = waveform / np.max(np.abs(waveform) + 1e-8)
+        max_val = np.max(np.abs(waveform))
+        if max_val > 0:
+            waveform = waveform / max_val
         
         return waveform, sr
     
@@ -74,8 +91,8 @@ class AudioProcessor:
         min_idx = np.argmin(np.abs(search_region))
         return start_search + min_idx
 
-    def extract_segment(self, audio, sr, start_time, end_time, text=""):
-        """Extract audio segment with zero-crossing alignment and interjection padding"""
+    def extract_segment(self, audio, sr, start_time, end_time, text="", tempo=1.0):
+        """Extract audio segment with zero-crossing alignment, interjection padding, and tempo adjustment"""
 
         # Check for interjections in brackets like [laughs]
         padding = 0.05  # Standard 50ms padding
@@ -90,19 +107,56 @@ class AudioProcessor:
         start_sample = self.find_best_cut_point(audio, sr, start_time)
         end_sample = self.find_best_cut_point(audio, sr, end_time)
 
+        # Ensure valid range
+        start_sample = max(0, min(start_sample, len(audio) - 1))
+        end_sample = max(start_sample + 1, min(end_sample, len(audio)))
+
         # Extract
         segment = audio[start_sample:end_sample]
-        
+
+        # Apply tempo adjustment if needed
+        if tempo != 1.0 and len(segment) > 0:
+            try:
+                segment = librosa.effects.time_stretch(segment, rate=tempo)
+            except Exception as e:
+                logger.error(f"Time stretch failed: {e}")
+
         # Apply small fade in/out to avoid clicks
-        fade_length = int(0.01 * sr)  # 10ms fade
+        fade_length = min(int(0.01 * sr), len(segment) // 4)  # 10ms fade or less
         if len(segment) > 2 * fade_length:
             fade_in = np.linspace(0, 1, fade_length)
             fade_out = np.linspace(1, 0, fade_length)
             segment[:fade_length] *= fade_in
             segment[-fade_length:] *= fade_out
-            
+
         return segment
     
+    def detect_onsets(self, audio, sr, backtrack=True):
+        """Detect onsets (energy 'humps') in the audio"""
+        try:
+            # Use RMS envelope for onset detection with better sensitivity for speech
+            # We use a smaller hop_length and specific parameters for dialogue
+            hop_length = 160 # 10ms at 16k
+            onset_env = librosa.onset.onset_strength(
+                y=audio, sr=sr, hop_length=hop_length,
+                aggregate=np.median,
+                fmax=8000, n_mels=128
+            )
+            onsets = librosa.onset.onset_detect(
+                onset_envelope=onset_env, sr=sr, hop_length=hop_length,
+                backtrack=backtrack,
+                pre_max=20, post_max=20, pre_avg=100, post_avg=100,
+                delta=0.2, wait=30 # Increased wait to avoid detecting multiple onsets for one word
+            )
+            return librosa.frames_to_time(onsets, sr=sr, hop_length=hop_length)
+        except Exception as e:
+            logger.error(f"Onset detection failed: {e}")
+            return []
+
+    def get_segment_onsets(self, onsets, start_time, end_time):
+        """Filter global onsets to find those within a specific time range"""
+        return [o for o in onsets if start_time <= o <= end_time]
+
     def detect_silence(self, audio, sr, threshold=0.01, min_silence_duration=0.1):
         """Detect silence regions in audio"""
         # Compute energy
@@ -116,7 +170,9 @@ class AudioProcessor:
         )[0]
         
         # Normalize energy
-        energy = energy / np.max(energy + 1e-8)
+        max_energy = np.max(energy)
+        if max_energy > 0:
+            energy = energy / max_energy
         
         # Find silence frames
         silence_frames = energy < threshold

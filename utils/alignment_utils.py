@@ -188,15 +188,16 @@ class AlignmentUtils:
             end_str = match.group(3)
             text = match.group(4).strip()
 
-            # Simple speaker detection if text is "Speaker: text"
+            # Robust speaker detection
             speaker = "Unknown"
-            if ':' in text[:30]:
-                parts = text.split(':', 1)
-                potential_speaker = parts[0].strip()
-                # If it looks like a name (not too many words)
-                if 0 < len(potential_speaker.split()) <= 2:
+            # Look for "Name: " at the start of the line or the entire text
+            speaker_match = re.match(r'^([^:\n\[\]]+):\s*(.*)', text, re.DOTALL)
+            if speaker_match:
+                potential_speaker = speaker_match.group(1).strip()
+                # If it looks like a name (not too many words and not just tags)
+                if 0 < len(potential_speaker.split()) <= 3:
                     speaker = potential_speaker
-                    text = parts[1].strip()
+                    text = speaker_match.group(2).strip()
 
             segments.append({
                 'start': time_to_seconds(start_str),
@@ -207,17 +208,19 @@ class AlignmentUtils:
             })
         return segments
 
-    def reconstruct_character_track(self, aligned_segments, sr):
+    def reconstruct_character_track(self, aligned_segments, sr, total_duration=None):
         """
         Place aligned audio segments on a silent track at their target timecodes.
         aligned_segments: list of (target_start, target_end, audio_segment)
         """
-        if not aligned_segments:
+        if not aligned_segments and total_duration is None:
             return np.array([])
 
         # Find required total duration
-        max_end = max(s[1] for s in aligned_segments)
-        full_track = np.zeros(int(max_end * sr))
+        if total_duration is None:
+            total_duration = max(s[1] for s in aligned_segments) if aligned_segments else 0
+
+        full_track = np.zeros(int(total_duration * sr))
 
         for target_start, target_end, audio_seg in aligned_segments:
             start_sample = int(target_start * sr)
