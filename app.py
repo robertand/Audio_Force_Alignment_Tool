@@ -413,9 +413,22 @@ def process_audio():
 
         job_id = str(uuid.uuid4())
         
+        # Save video if provided
+        files_to_track = []
+        video_file = request.files.get('video')
+        if video_file:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"{job_id}_video_{timestamp}.mp4"
+            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            video_file.save(filepath)
+            files_to_track.append({
+                'path': filepath,
+                'type': 'video',
+                'filename': video_file.filename
+            })
+
         # Save audio files
         audio_files_info = {}
-        files_to_track = []
         
         for speaker in speakers_to_process:
             audio_key = f'audio_{speaker}'
@@ -628,6 +641,21 @@ def preview_file(filename):
         os.path.join(app.config['OUTPUT_FOLDER'], filename),
         mimetype='audio/wav'
     )
+
+@app.route('/api/video/<job_id>')
+def get_video(job_id):
+    """Get the video for a job"""
+    with jobs_lock:
+        job = JOBS.get(job_id)
+        if not job:
+            return jsonify({'error': 'Job not found'}), 404
+
+        # Find video file
+        for file_info in job.get('files', []):
+            if file_info.get('type') == 'video':
+                return send_file(file_info['path'])
+
+        return jsonify({'error': 'Video not found'}), 404
 
 @app.route('/api/original-audio/<job_id>/<speaker>')
 def get_original_audio(job_id, speaker):

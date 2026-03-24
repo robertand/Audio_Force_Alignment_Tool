@@ -1,0 +1,8 @@
+/home/jules/.pyenv/versions/3.12.13/lib/python3.12/site-packages/webrtcvad.py:1: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  import pkg_resources
+2026-03-24 12:10:55,140 - __main__ - WARNING - ⚠️ GPU not detected. Using CPU (will be slower)
+2026-03-24 12:10:55,141 - __main__ - INFO - Cleanup thread started
+ * Serving Flask app 'app'
+ * Debug mode: on
+Address already in use
+Port 5000 is in use by another program. Either identify and stop that program, or start the server with a different port.
