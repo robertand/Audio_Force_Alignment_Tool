@@ -200,8 +200,11 @@ def apply_alignment_post_processing(alignments, onsets, preceding_end=None):
         effective_prev_end = preceding_end if (i == 0) else (alignments[i-1].get('aligned')['end'] if alignments[i-1].get('aligned') else None)
 
         if effective_prev_end is not None:
-            if curr['start'] < effective_prev_end + 0.05:
-                curr['start'] = effective_prev_end + 0.05
+            # Loosen overlap rule for high confidence matches
+            min_gap = 0.01 if (curr.get('confidence', 0) > 0.8) else 0.05
+
+            if curr['start'] < effective_prev_end + min_gap:
+                curr['start'] = effective_prev_end + min_gap
                 if curr['end'] <= curr['start']:
                     curr['end'] = curr['start'] + 0.1
 
@@ -759,10 +762,16 @@ def realign_segments():
             return jsonify({'success': False, 'error': 'Aligner not available'}), 500
 
         # Re-align with offset
+        # Provide text context from preceding segment for better linguistic context
+        initial_prompt = ""
+        if start_index > 0:
+            initial_prompt = speaker_data[start_index - 1][1].get('text_ro', '')
+
         new_alignments = aligner.align_character_audio(
             audio_path, expected_segments,
             language="ro",
-            offset_time=offset_time
+            offset_time=offset_time,
+            initial_prompt=initial_prompt
         )
 
         # Determine the preceding end boundary for the first segment in the batch

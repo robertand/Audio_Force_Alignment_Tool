@@ -42,9 +42,13 @@ class DialogueAligner:
             import librosa
             audio, sr = librosa.load(audio_path, sr=16000)
             
+            # Add context look-back padding if starting from offset
+            lookback_padding = 0.5 if offset_time > 0.5 else 0.0
+
             if offset_time > 0:
-                # Slice audio to start from offset
-                audio = audio[int(offset_time * sr):]
+                # Slice audio to start from offset (with small look-back for context)
+                start_sample = int((offset_time - lookback_padding) * sr)
+                audio = audio[start_sample:]
 
             # Move to GPU if available
             if self.device == "cuda":
@@ -78,17 +82,23 @@ class DialogueAligner:
                 best_match = None
                 highest_ratio = 0.0
                 for transcribed in transcribed_segments:
-                    ratio = difflib.SequenceMatcher(None, expected_text, self._normalize_text(transcribed['text'])).ratio()
+                    # Normalize both for comparison
+                    norm_trans = self._normalize_text(transcribed['text'])
+                    ratio = difflib.SequenceMatcher(None, expected_text, norm_trans).ratio()
                     if ratio > highest_ratio:
                         highest_ratio = ratio
                         best_match = transcribed
 
-                if best_match and highest_ratio > 0.7: # High threshold for anchors
+                if best_match and highest_ratio > 0.6: # Loosened anchor threshold
+                    # Adjust for lookback_padding
+                    m_start = best_match['start'] - lookback_padding
+                    m_end = best_match['end'] - lookback_padding
+
                     aligned_results.append({
                         'original': expected,
                         'aligned': {
-                            'start': best_match['start'] + offset_time,
-                            'end': best_match['end'] + offset_time,
+                            'start': m_start + offset_time,
+                            'end': m_end + offset_time,
                             'text': best_match['text'],
                             'confidence': highest_ratio,
                             'words': best_match.get('words', [])
@@ -124,20 +134,23 @@ class DialogueAligner:
                 highest_local_ratio = 0.0
 
                 for transcribed in transcribed_segments:
-                    # Match must be within the gap. Use global coordinates.
-                    trans_start = transcribed['start'] + offset_time
-                    trans_end = transcribed['end'] + offset_time
+                    # Normalize and adjust for lookback
+                    norm_trans = self._normalize_text(transcribed['text'])
+                    t_start = (transcribed['start'] - lookback_padding) + offset_time
+                    t_end = (transcribed['end'] - lookback_padding) + offset_time
 
-                    if trans_start >= gap_start - 0.2 and trans_end <= gap_end + 0.2:
-                        ratio = difflib.SequenceMatcher(None, expected_text, self._normalize_text(transcribed['text'])).ratio()
+                    # Match must be within the gap (loosened window)
+                    if t_start >= gap_start - 0.5 and t_end <= gap_end + 0.5:
+                        ratio = difflib.SequenceMatcher(None, expected_text, norm_trans).ratio()
                         if ratio > highest_local_ratio:
                             highest_local_ratio = ratio
                             best_local_match = transcribed
+                            best_local_timing = (t_start, t_end)
 
-                if best_local_match and highest_local_ratio >= 0.3:
+                if best_local_match and highest_local_ratio >= 0.25: # Loosened gap threshold
                     aligned_results[i]['aligned'] = {
-                        'start': best_local_match['start'] + offset_time,
-                        'end': best_local_match['end'] + offset_time,
+                        'start': best_local_timing[0],
+                        'end': best_local_timing[1],
                         'text': best_local_match['text'],
                         'confidence': highest_local_ratio,
                         'words': best_local_match.get('words', [])

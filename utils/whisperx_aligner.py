@@ -66,9 +66,12 @@ class WhisperXAligner:
             import librosa
             audio, sr = librosa.load(audio_path, sr=16000)
 
+            # Add context look-back padding if starting from offset
+            lookback_padding = 0.5 if offset_time > 0.5 else 0.0
+
             if offset_time > 0:
-                # Ensure we don't slice past the end
-                start_sample = min(int(offset_time * sr), len(audio) - 1)
+                # Slice audio to start from offset (with look-back)
+                start_sample = max(0, int((offset_time - lookback_padding) * sr))
                 audio = audio[start_sample:]
 
             # 2. Initial Transcription
@@ -126,8 +129,9 @@ class WhisperXAligner:
                 for transcribed in transcribed_segments:
                     # WhisperX segments already have word-level timestamps inside if needed
                     # But for the block level, we match the text. Use global coordinates for matching.
-                    trans_start = float(transcribed['start']) + offset_time
-                    trans_end = float(transcribed['end']) + offset_time
+                    # Adjust for lookback_padding
+                    trans_start = (float(transcribed['start']) - lookback_padding) + offset_time
+                    trans_end = (float(transcribed['end']) - lookback_padding) + offset_time
 
                     norm_trans = clean_text_for_alignment(transcribed['text'])
                     ratio = difflib.SequenceMatcher(None, expected_text, norm_trans).ratio()
@@ -135,13 +139,14 @@ class WhisperXAligner:
                     if ratio > highest_ratio:
                         highest_ratio = ratio
                         best_match = transcribed
+                        best_timing = (trans_start, trans_end)
 
-                if best_match and highest_ratio > 0.4:
+                if best_match and highest_ratio > 0.3: # Loosened match threshold
                     aligned_results.append({
                         'original': expected,
                         'aligned': {
-                            'start': float(best_match['start']) + offset_time,
-                            'end': float(best_match['end']) + offset_time,
+                            'start': best_timing[0],
+                            'end': best_timing[1],
                             'text': best_match['text'],
                             'confidence': float(highest_ratio),
                             'words': best_match.get('words', [])
@@ -168,6 +173,7 @@ class WhisperXAligner:
             if aligned_results[i]['aligned'] is not None:
                 continue
 
+            # Gap window relative to global timeline
             gap_start = offset_time
             gap_end = total_duration
 
