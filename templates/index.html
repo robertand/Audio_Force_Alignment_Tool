@@ -26,22 +26,24 @@
 
         #projectTimeline {
             position: relative;
-            height: 120px;
+            height: 60px;
             background: #f8fafc;
             border: 1px solid #e2e8f0;
             border-radius: 8px;
-            overflow: hidden;
+            overflow-x: auto;
+            overflow-y: hidden;
             margin: 20px 0;
             cursor: crosshair;
             width: 100vw;
             left: 50%;
             transform: translateX(-50%);
+            white-space: nowrap;
         }
 
         .timeline-block {
             position: absolute;
-            height: 80%;
-            top: 10%;
+            height: 100%;
+            top: 0;
             background: #6366f1;
             color: white;
             border-radius: 4px;
@@ -717,6 +719,19 @@
                 container.classList.remove('hidden');
                 icon.classList.remove('fa-plus-circle');
                 icon.classList.add('fa-minus-circle');
+
+                // Re-initialize waveforms to ensure they render correctly in the newly visible container
+                Object.keys(waveforms).forEach(index => {
+                    const ws = waveforms[index];
+                    if (ws) {
+                        const block = document.getElementById(`seg-${index}`);
+                        const s = parseFloat(block.querySelector('.source-start').value);
+                        ws.setTime(s);
+                        // Trigger resize to fix any rendering issues in visible container
+                        setTimeout(() => ws.drawer.containerWidth = 0, 0);
+                        setTimeout(() => ws.zoom(ws.params.minPxPerSec), 50);
+                    }
+                });
             } else {
                 container.classList.add('hidden');
                 icon.classList.remove('fa-minus-circle');
@@ -890,27 +905,9 @@
                         csvStartInput.value = newStart.toFixed(2);
                         csvEndInput.value = newEnd.toFixed(2);
 
-                        // Update label/delta without full re-render
-                        const deltaLabel = block.querySelector('.delta-label');
-                        if (deltaLabel) {
-                            const s = parseFloat(block.querySelector('.source-start').value);
-                            const e = parseFloat(block.querySelector('.source-end').value);
-                            const tempo = parseFloat(block.querySelector('.tempo').value) || 1.0;
-                            const targetDuration = newEnd - newStart;
-                            const sourceDuration = (e - s) / tempo;
-                            const diff = sourceDuration - targetDuration;
-
-                            if (Math.abs(diff) < 0.01) {
-                                deltaLabel.textContent = 'Perfect Match';
-                                deltaLabel.className = 'delta-label text-green-500';
-                            } else if (diff > 0) {
-                                deltaLabel.textContent = `+${diff.toFixed(2)}s Added`;
-                                deltaLabel.className = 'delta-label text-blue-500';
-                            } else {
-                                deltaLabel.textContent = `${diff.toFixed(2)}s Removed`;
-                                deltaLabel.className = 'delta-label text-orange-500';
-                            }
-                        }
+                        // Trigger input event to sync with other UI elements
+                        csvStartInput.dispatchEvent(new Event('input', { bubbles: true }));
+                        csvEndInput.dispatchEvent(new Event('input', { bubbles: true }));
                     };
 
                     const onMouseUp = () => {
@@ -974,13 +971,17 @@
 
             waveforms[index] = ws;
 
+            const block = document.getElementById(`seg-${index}`);
+
             ws.on('ready', () => {
-                const s = parseFloat(block.querySelector('.source-start').value);
-                ws.setTime(s);
+                const sInput = block.querySelector('.source-start');
+                if (sInput) {
+                    const s = parseFloat(sInput.value);
+                    ws.setTime(s);
+                }
                 updateView();
             });
 
-            const block = document.getElementById(`seg-${index}`);
             const inputs = block.querySelectorAll('input');
 
             // Handle Region updates (dragging)
@@ -1090,8 +1091,10 @@
         }
 
         function previewSegment(btn, speaker, index) {
+            const video = document.getElementById('projectVideo');
             if (activeAudio) {
                 activeAudio.pause();
+                if (currentVideoFile) video.pause();
                 const oldBtn = activeAudio.btn;
                 if (oldBtn) oldBtn.innerHTML = '<i class="fas fa-play"></i>';
 
@@ -1123,6 +1126,13 @@
                 audio.currentTime = start;
                 audio.play();
 
+                if (currentVideoFile) {
+                    const block = document.getElementById(`seg-${index}`);
+                    const csvStart = parseFloat(block.querySelector('.csv-start').value);
+                    video.currentTime = csvStart;
+                    video.play();
+                }
+
                 // Sync waveform progress
                 const ws = waveforms[index];
                 const duration = (end - start) / tempo;
@@ -1136,6 +1146,7 @@
                 setTimeout(() => {
                     if (activeAudio === audio) {
                         audio.pause();
+                        if (currentVideoFile) video.pause();
                         btn.innerHTML = '<i class="fas fa-play"></i>';
                         activeAudio = null;
                         ws.setTime(start);
@@ -1145,6 +1156,7 @@
 
             audio.addEventListener('ended', () => {
                 btn.innerHTML = '<i class="fas fa-play"></i>';
+                if (currentVideoFile) video.pause();
                 activeAudio = null;
             });
         }
@@ -1289,7 +1301,7 @@
             // For each speaker, we need to enforce no-overlap
             const speakerBlocks = {};
             blocks.forEach(block => {
-                const speaker = block.querySelector('.text-indigo-900').textContent;
+                const speaker = block.querySelector('.font-bold').textContent;
                 if (!speakerBlocks[speaker]) speakerBlocks[speaker] = [];
                 speakerBlocks[speaker].push(block);
             });
@@ -1342,12 +1354,24 @@
             showToast(`Adjusted all segments: ${startDelta !== 0 ? 'In ' + (startDelta > 0 ? '+' : '') + startDelta + 's' : ''} ${endDelta !== 0 ? 'Out ' + (endDelta > 0 ? '+' : '') + endDelta + 's' : ''}`, 'success');
         }
 
+        let previewActive = false;
         async function previewProject() {
+            if (previewActive) {
+                previewActive = false;
+                if (activeAudio) {
+                    activeAudio.pause();
+                    activeAudio = null;
+                }
+                document.getElementById('projectVideo').pause();
+                return;
+            }
+
+            previewActive = true;
             const video = document.getElementById('projectVideo');
             const blocks = Array.from(document.querySelectorAll('#segmentList > div'));
             const segments = blocks.map((block, index) => ({
                 index,
-                speaker: block.querySelector('.text-indigo-900').textContent,
+                speaker: block.querySelector('.font-bold').textContent,
                 csv_start: parseFloat(block.querySelector('.csv-start').value),
                 source_start: parseFloat(block.querySelector('.source-start').value),
                 source_end: parseFloat(block.querySelector('.source-end').value),
@@ -1358,11 +1382,16 @@
             // Sort by target timecode (chronological order of final output)
             segments.sort((a, b) => a.csv_start - b.csv_start);
 
-            if (segments.length === 0) return;
+            if (segments.length === 0) {
+                previewActive = false;
+                return;
+            }
 
-            showToast('Starting Project Preview (Sequential by CSV timecodes)', 'info');
+            showToast('Starting Project Preview (Sequential)', 'info');
 
             for (const seg of segments) {
+                if (!previewActive) break;
+
                 // Flash the segment block
                 const el = document.getElementById(`seg-${seg.index}`);
                 if (!document.getElementById('segmentListContainer').classList.contains('hidden')) {
@@ -1375,30 +1404,21 @@
                 const timelineBlock = document.querySelector(`.timeline-block[data-index="${seg.index}"]`);
                 if (timelineBlock) timelineBlock.classList.add('active');
 
-                // Update video position
-                if (currentVideoFile) {
-                    video.currentTime = seg.csv_start;
-                    video.play();
-                }
-
                 // Play and wait
-                await new Promise(resolve => {
-                    const duration = (seg.source_end - seg.source_start) / seg.tempo;
-                    previewSegment(seg.btn, seg.speaker, seg.index);
+                const duration = (seg.source_end - seg.source_start) / seg.tempo;
+                previewSegment(seg.btn, seg.speaker, seg.index);
 
-                    setTimeout(() => {
-                        el.classList.remove('bg-indigo-50');
-                        if (currentVideoFile) video.pause();
-                        resolve();
-                    }, (duration * 1000) + 200); // 200ms gap
-                });
+                await new Promise(resolve => setTimeout(resolve, (duration * 1000) + 200));
 
-                if (activeAudio === null) {
-                    if (currentVideoFile) video.pause();
-                    break; // Interrupted
+                el.classList.remove('bg-indigo-50');
+
+                if (activeAudio === null && previewActive) {
+                    // This means the segment was stopped manually or failed to start
+                    previewActive = false;
                 }
             }
 
+            previewActive = false;
             document.querySelectorAll('.timeline-block').forEach(b => b.classList.remove('active'));
         }
 
