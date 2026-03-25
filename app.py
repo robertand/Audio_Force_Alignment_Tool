@@ -399,47 +399,59 @@ def system_info():
 def process_audio():
     """Start alignment process"""
     try:
+        data = request.json
         # Get metadata and settings
-        segments = json.loads(request.form.get('segments', '[]'))
-        use_whisper = request.form.get('use_whisper') == 'true'
-        use_whisperx = request.form.get('use_whisperx') == 'true'
-        use_mms = request.form.get('use_mms') == 'true'
-        speakers_to_process = request.form.getlist('speakers')
-        model_name = request.form.get('whisper_model', 'base')
-        initial_prompt = request.form.get('initial_prompt', '')
+        segments = data.get('segments', [])
+        use_whisper = data.get('use_whisper')
+        use_whisperx = data.get('use_whisperx')
+        use_mms = data.get('use_mms', False)
+        speakers_to_process = data.get('speakers', [])
+        model_name = data.get('whisper_model', 'base')
+        initial_prompt = data.get('initial_prompt', '')
         
         if not segments or not speakers_to_process:
             return jsonify({'success': False, 'error': 'Missing metadata or speakers'}), 400
 
         job_id = str(uuid.uuid4())
-        
-        # Save audio files
-        audio_files_info = {}
         files_to_track = []
-        
-        for speaker in speakers_to_process:
-            audio_key = f'audio_{speaker}'
-            audio_file = request.files.get(audio_key)
-            if audio_file:
-                # Sanitize filename
-                safe_speaker = secure_filename(speaker)
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"{job_id}_{safe_speaker}_{timestamp}.wav"
-                filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-                
-                audio_file.save(filepath)
+        audio_files_info = {}
+
+        # 1. Handle Video (already uploaded via chunks)
+        video_filename = data.get('video_filename')
+        if video_filename:
+            video_filename = secure_filename(video_filename)
+            video_path = os.path.abspath(os.path.join(app.config['UPLOAD_FOLDER'], video_filename))
+            if not video_path.startswith(os.path.abspath(app.config['UPLOAD_FOLDER'])):
+                 return jsonify({'success': False, 'error': 'Invalid video path'}), 403
+
+            if os.path.exists(video_path):
+                files_to_track.append({
+                    'path': video_path,
+                    'type': 'video',
+                    'filename': video_filename
+                })
+
+        # 2. Handle Audio Files (already uploaded via chunks)
+        audio_filenames = data.get('audio_filenames', {}) # {speaker: server_filename}
+        for speaker, server_filename in audio_filenames.items():
+            server_filename = secure_filename(server_filename)
+            audio_path = os.path.abspath(os.path.join(app.config['UPLOAD_FOLDER'], server_filename))
+            if not audio_path.startswith(os.path.abspath(app.config['UPLOAD_FOLDER'])):
+                 return jsonify({'success': False, 'error': 'Invalid audio path'}), 403
+
+            if os.path.exists(audio_path):
                 audio_files_info[speaker] = {
-                    'path': filepath,
-                    'filename': audio_file.filename,
-                    'size': os.path.getsize(filepath)
+                    'path': audio_path,
+                    'filename': server_filename,
+                    'size': os.path.getsize(audio_path)
                 }
                 files_to_track.append({
-                    'path': filepath,
+                    'path': audio_path,
                     'type': 'upload'
                 })
 
         if not audio_files_info:
-            return jsonify({'success': False, 'error': 'No audio files uploaded'}), 400
+            return jsonify({'success': False, 'error': 'No audio files uploaded or found'}), 400
 
         # Get total duration
         total_duration = max(s['end'] for s in segments) if segments else 0
@@ -628,6 +640,21 @@ def preview_file(filename):
         os.path.join(app.config['OUTPUT_FOLDER'], filename),
         mimetype='audio/wav'
     )
+
+@app.route('/api/video/<job_id>')
+def get_video(job_id):
+    """Get the video for a job"""
+    with jobs_lock:
+        job = JOBS.get(job_id)
+        if not job:
+            return jsonify({'error': 'Job not found'}), 404
+
+        # Find video file
+        for file_info in job.get('files', []):
+            if file_info.get('type') == 'video':
+                return send_file(file_info['path'])
+
+        return jsonify({'error': 'Video not found'}), 404
 
 @app.route('/api/original-audio/<job_id>/<speaker>')
 def get_original_audio(job_id, speaker):
@@ -841,16 +868,19 @@ def job_status(job_id):
 @app.route('/api/upload-metadata', methods=['POST'])
 def upload_metadata():
     """Upload and parse metadata file"""
-    temp_dir = None
     try:
-        metadata_file = request.files.get('metadata')
-        if not metadata_file:
-            return jsonify({'success': False, 'error': 'No file provided'}), 400
+        data = request.json
+        server_filename = secure_filename(data.get('server_filename'))
 
-        # Create temp directory
-        temp_dir = tempfile.mkdtemp(dir=app.config['UPLOAD_FOLDER'])
-        file_path = os.path.join(temp_dir, secure_filename(metadata_file.filename))
-        metadata_file.save(file_path)
+        if not server_filename:
+            return jsonify({'success': False, 'error': 'No filename provided'}), 400
+
+        file_path = os.path.abspath(os.path.join(app.config['UPLOAD_FOLDER'], server_filename))
+        if not file_path.startswith(os.path.abspath(app.config['UPLOAD_FOLDER'])):
+             return jsonify({'success': False, 'error': 'Invalid path'}), 403
+
+        if not os.path.exists(file_path):
+            return jsonify({'success': False, 'error': 'File not found on server'}), 404
 
         segments = []
         file_ext = os.path.splitext(file_path)[1].lower()
@@ -899,7 +929,7 @@ def upload_metadata():
             'success': True,
             'speakers': speakers,
             'segments': segments,
-            'filename': metadata_file.filename,
+            'filename': server_filename,
             'stats': {
                 'total_segments': len(segments),
                 'total_duration': total_duration,
@@ -911,9 +941,78 @@ def upload_metadata():
     except Exception as e:
         logger.error(f"Upload metadata error: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
-    finally:
-        if temp_dir and os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir, ignore_errors=True)
+
+@app.route('/api/upload-chunk', methods=['POST'])
+def upload_chunk():
+    """Receive a file chunk"""
+    try:
+        file_id = secure_filename(request.form.get('file_id'))
+        chunk_index = int(request.form.get('chunk_index'))
+        chunk = request.files.get('chunk')
+
+        if not file_id or chunk is None:
+            return jsonify({'success': False, 'error': 'Missing parameters'}), 400
+
+        # Sanitize and validate directory
+        temp_dir = os.path.abspath(os.path.join(app.config['UPLOAD_FOLDER'], 'chunks', file_id))
+        if not temp_dir.startswith(os.path.abspath(app.config['UPLOAD_FOLDER'])):
+             return jsonify({'success': False, 'error': 'Invalid path'}), 403
+
+        os.makedirs(temp_dir, exist_ok=True)
+        chunk_path = os.path.join(temp_dir, f"{chunk_index}.part")
+        chunk.save(chunk_path)
+
+        return jsonify({'success': True, 'chunk_index': chunk_index})
+    except Exception as e:
+        logger.error(f"Chunk upload error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/merge-chunks', methods=['POST'])
+def merge_chunks():
+    """Merge uploaded chunks into a single file"""
+    try:
+        data = request.json
+        file_id = secure_filename(data.get('file_id'))
+        filename = secure_filename(data.get('filename'))
+        total_chunks = int(data.get('total_chunks'))
+
+        if not file_id or not filename:
+            return jsonify({'success': False, 'error': 'Missing parameters'}), 400
+
+        # Sanitize and validate directories
+        chunk_dir = os.path.abspath(os.path.join(app.config['UPLOAD_FOLDER'], 'chunks', file_id))
+        if not chunk_dir.startswith(os.path.abspath(app.config['UPLOAD_FOLDER'])):
+             return jsonify({'success': False, 'error': 'Invalid path'}), 403
+
+        if not os.path.exists(chunk_dir):
+            return jsonify({'success': False, 'error': 'Chunks not found'}), 404
+
+        # Output filename should include unique ID to avoid collisions
+        unique_filename = f"{file_id}_{filename}"
+        output_path = os.path.abspath(os.path.join(app.config['UPLOAD_FOLDER'], unique_filename))
+        if not output_path.startswith(os.path.abspath(app.config['UPLOAD_FOLDER'])):
+             return jsonify({'success': False, 'error': 'Invalid output path'}), 403
+
+        with open(output_path, 'wb') as outfile:
+            for i in range(total_chunks):
+                chunk_path = os.path.join(chunk_dir, f"{i}.part")
+                if not os.path.exists(chunk_path):
+                    return jsonify({'success': False, 'error': f'Chunk {i} missing'}), 400
+
+                with open(chunk_path, 'rb') as infile:
+                    outfile.write(infile.read())
+
+        # Clean up chunks
+        shutil.rmtree(chunk_dir, ignore_errors=True)
+
+        return jsonify({
+            'success': True,
+            'filename': unique_filename,
+            'path': output_path
+        })
+    except Exception as e:
+        logger.error(f"Merge chunks error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/cancel-job/<job_id>', methods=['POST'])
 def cancel_job(job_id):

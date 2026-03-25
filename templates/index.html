@@ -24,6 +24,70 @@
             backdrop-filter: blur(10px);
         }
 
+        #projectTimeline {
+            position: relative;
+            height: 60px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            overflow-x: auto;
+            overflow-y: hidden;
+            margin: 20px 0;
+            cursor: crosshair;
+            width: 100vw;
+            left: 50%;
+            transform: translateX(-50%);
+            white-space: nowrap;
+        }
+
+        .timeline-block {
+            position: absolute;
+            height: 100%;
+            top: 0;
+            background: #6366f1;
+            color: white;
+            border-radius: 4px;
+            font-size: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0 4px;
+            cursor: grab;
+            user-select: none;
+            overflow: hidden;
+            white-space: nowrap;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            transition: transform 0.1s;
+        }
+
+        .timeline-block canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            opacity: 0.5;
+        }
+
+        .timeline-block span {
+            position: relative;
+            z-index: 10;
+            font-weight: bold;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+        }
+
+        .timeline-block:active {
+            cursor: grabbing;
+            transform: scale(1.02);
+            z-index: 100;
+        }
+
+        .timeline-block.active {
+            outline: 2px solid #ef4444;
+            outline-offset: 2px;
+        }
+
         /* Custom WaveSurfer Regions Styling */
         .wavesurfer-region {
             border-left: 2px solid #ef4444 !important;
@@ -107,6 +171,16 @@
                             Browse Files
                         </button>
                         <p class="mt-4 text-sm text-gray-500">CSV format: start,end,speaker,en,ro</p>
+                    </div>
+
+                    <div class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-indigo-500 transition-colors">
+                        <i class="fas fa-video text-3xl text-gray-400 mb-4"></i>
+                        <p class="text-gray-600 mb-2">Upload reference video (optional)</p>
+                        <input type="file" id="videoFile" accept="video/*" class="hidden">
+                        <button type="button" onclick="document.getElementById('videoFile').click()" class="bg-gray-600 text-white px-6 py-2 rounded-lg hover:bg-gray-700 transition-colors">
+                            Browse Video
+                        </button>
+                        <p id="videoFileName" class="mt-2 text-sm text-indigo-600 font-medium"></p>
                     </div>
                     
                     <button type="submit" class="w-full bg-indigo-600 text-white py-3 rounded-lg font-semibold hover:bg-indigo-700 transition-colors disabled:opacity-50" id="analyzeBtn">
@@ -243,8 +317,33 @@
                     </div>
                 </div>
 
-                <div id="segmentList" class="space-y-6">
-                    <!-- Segment blocks will be added dynamically -->
+                <!-- Video Section -->
+                <div id="videoContainer" class="hidden mb-6 bg-black rounded-xl overflow-hidden shadow-inner w-[100vw] relative left-1/2 -translate-x-1/2 flex items-center justify-center">
+                    <video id="projectVideo" class="w-full h-auto" controls></video>
+                </div>
+
+                <!-- Project Timeline -->
+                <div class="mb-4">
+                    <h3 class="text-sm font-bold text-gray-400 uppercase tracking-widest mb-2">Project Timeline</h3>
+                    <div id="projectTimeline"></div>
+                    <div class="flex justify-between text-[10px] text-gray-400 font-mono mt-1">
+                        <span>0:00</span>
+                        <span id="timelineDurationLabel">0:00</span>
+                    </div>
+                </div>
+
+                <!-- Detailed Segments (Collapsible) -->
+                <div class="mt-8">
+                    <button onclick="toggleSegmentList()" class="flex items-center space-x-2 text-indigo-600 font-bold hover:text-indigo-800 transition-colors">
+                        <i id="segmentToggleIcon" class="fas fa-plus-circle text-xl"></i>
+                        <span>Show Detailed Segment Adjustments</span>
+                    </button>
+
+                    <div id="segmentListContainer" class="hidden mt-6 space-y-6">
+                        <div id="segmentList" class="space-y-6">
+                            <!-- Segment blocks will be added dynamically -->
+                        </div>
+                    </div>
                 </div>
 
                 <div class="mt-8 border-t pt-6">
@@ -309,6 +408,54 @@
             }
         }
 
+        // Chunked file upload helper
+        async function uploadFileInChunks(file, onProgress) {
+            const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB
+            const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+            const fileId = Date.now().toString() + '-' + Math.random().toString(36).substring(2, 9);
+
+            for (let i = 0; i < totalChunks; i++) {
+                const start = i * CHUNK_SIZE;
+                const end = Math.min(file.size, start + CHUNK_SIZE);
+                const chunk = file.slice(start, end);
+
+                const formData = new FormData();
+                formData.append('file_id', fileId);
+                formData.append('chunk_index', i);
+                formData.append('total_chunks', totalChunks);
+                formData.append('filename', file.name);
+                formData.append('chunk', chunk);
+
+                const response = await fetch('/api/upload-chunk', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                if (!result.success) throw new Error(result.error);
+
+                if (onProgress) {
+                    onProgress(((i + 1) / totalChunks) * 100);
+                }
+            }
+
+            // Merge chunks
+            const mergeResponse = await fetch('/api/merge-chunks', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    file_id: fileId,
+                    filename: file.name,
+                    total_chunks: totalChunks
+                })
+            });
+
+            const mergeResult = await mergeResponse.json();
+            if (!mergeResult.success) throw new Error(mergeResult.error);
+
+            return mergeResult.filename; // Returns the server-side unique filename
+        }
+
         // Toast notification
         function showToast(message, type = 'info') {
             const toast = document.getElementById('toast');
@@ -326,15 +473,29 @@
         }
 
         let currentMetadata = null;
+        let currentVideoFile = null;
         let currentJobId = null;
         let jobAlignmentResults = null;
         let activeAudio = null;
         let speakerWaveforms = {}; // Cache for speaker waveform peaks
+        let speakerColors = {};
 
         // Initialize
         loadSystemInfo();
 
         // Metadata form submission
+        document.getElementById('metadataFile').addEventListener('change', (e) => {
+            const fileName = e.target.files[0] ? e.target.files[0].name : '';
+        });
+
+        document.getElementById('videoFile').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                currentVideoFile = file;
+                document.getElementById('videoFileName').textContent = file.name;
+            }
+        });
+
         document.getElementById('metadataForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const file = document.getElementById('metadataFile').files[0];
@@ -344,16 +505,21 @@
                 return;
             }
 
-            const formData = new FormData();
-            formData.append('metadata', file);
-
             try {
                 document.getElementById('analyzeBtn').disabled = true;
+                document.getElementById('analyzeBtn').innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Uploading...';
+
+                // Use chunked upload for metadata
+                const serverFilename = await uploadFileInChunks(file, (p) => {
+                    document.getElementById('analyzeBtn').innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i>Uploading ${Math.round(p)}%`;
+                });
+
                 document.getElementById('analyzeBtn').innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Analyzing...';
 
                 const response = await fetch('/api/upload-metadata', {
                     method: 'POST',
-                    body: formData
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ server_filename: serverFilename })
                 });
                 
                 const result = await response.json();
@@ -433,7 +599,9 @@
             document.getElementById('step2').classList.add('hidden');
             document.getElementById('resultsSection').classList.add('hidden');
             document.getElementById('metadataForm').reset();
+            document.getElementById('videoFileName').textContent = '';
             currentMetadata = null;
+            currentVideoFile = null;
         }
 
         // Process form submission
@@ -448,37 +616,67 @@
                 return;
             }
 
-            const formData = new FormData();
-            formData.append('segments', JSON.stringify(currentMetadata.segments));
-            formData.append('use_whisperx', aligner === 'whisperx');
-            formData.append('use_whisper', aligner === 'whisper');
-            formData.append('whisper_model', document.getElementById('whisperModel').value);
-            formData.append('initial_prompt', document.getElementById('initialPrompt').value);
-
-            let hasAudio = false;
-            selects.forEach(select => {
-                const speaker = select.getAttribute('data-speaker');
-                const input = document.querySelector(`.audio-input[data-speaker="${speaker}"]`);
-                if (input.files[0]) {
-                    formData.append(`audio_${speaker}`, input.files[0]);
-                    hasAudio = true;
-                }
-                formData.append('speakers', speaker);
-            });
-
-            if (!hasAudio) {
-                showToast('Upload at least one audio file', 'error');
-                return;
-            }
-
-            // Show progress
+            // Show initial upload status
             document.getElementById('progressBar').classList.remove('hidden');
             document.getElementById('processBtn').disabled = true;
+            document.getElementById('progressStatus').innerText = "Preparing uploads...";
 
             try {
+                const audioFilesData = {};
+                const speakersList = [];
+                let videoServerFilename = null;
+
+                // 1. Upload Video if exists (Chunked)
+                if (currentVideoFile) {
+                    document.getElementById('progressStatus').innerText = "Uploading video...";
+                    videoServerFilename = await uploadFileInChunks(currentVideoFile, (p) => {
+                        document.getElementById('progressFill').style.width = p + '%';
+                        document.getElementById('progressPercentage').innerText = Math.round(p) + '%';
+                    });
+                }
+
+                // 2. Upload Character Audio Files (Chunked)
+                let audioUploadedCount = 0;
+                const selectedSelects = Array.from(selects);
+
+                for (const select of selectedSelects) {
+                    const speaker = select.getAttribute('data-speaker');
+                    const input = document.querySelector(`.audio-input[data-speaker="${speaker}"]`);
+                    speakersList.push(speaker);
+
+                    if (input.files[0]) {
+                        document.getElementById('progressStatus').innerText = `Uploading audio for ${speaker}...`;
+                        const audioFilename = await uploadFileInChunks(input.files[0], (p) => {
+                            document.getElementById('progressFill').style.width = p + '%';
+                            document.getElementById('progressPercentage').innerText = Math.round(p) + '%';
+                        });
+                        audioFilesData[speaker] = audioFilename;
+                        audioUploadedCount++;
+                    }
+                }
+
+                if (audioUploadedCount === 0) {
+                    showToast('Upload at least one audio file', 'error');
+                    document.getElementById('progressBar').classList.add('hidden');
+                    document.getElementById('processBtn').disabled = false;
+                    return;
+                }
+
+                // 3. Trigger Process with Server Filenames
+                document.getElementById('progressStatus').innerText = "Starting alignment...";
                 const response = await fetch('/api/process', {
                     method: 'POST',
-                    body: formData
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        segments: currentMetadata.segments,
+                        use_whisperx: aligner === 'whisperx',
+                        use_whisper: aligner === 'whisper',
+                        whisper_model: document.getElementById('whisperModel').value,
+                        initial_prompt: document.getElementById('initialPrompt').value,
+                        video_filename: videoServerFilename,
+                        audio_filenames: audioFilesData,
+                        speakers: speakersList
+                    })
                 });
 
                 const result = await response.json();
@@ -529,10 +727,95 @@
             poll();
         }
 
+        function toggleSegmentList() {
+            const container = document.getElementById('segmentListContainer');
+            const icon = document.getElementById('segmentToggleIcon');
+            const isHidden = container.classList.contains('hidden');
+
+            if (isHidden) {
+                container.classList.remove('hidden');
+                icon.classList.remove('fa-plus-circle');
+                icon.classList.add('fa-minus-circle');
+
+                // Re-initialize waveforms to ensure they render correctly in the newly visible container
+                Object.keys(waveforms).forEach(index => {
+                    const ws = waveforms[index];
+                    if (ws) {
+                        const block = document.getElementById(`seg-${index}`);
+                        const s = parseFloat(block.querySelector('.source-start').value);
+                        const e = parseFloat(block.querySelector('.source-end').value);
+                        const csvS = parseFloat(block.querySelector('.csv-start').value);
+                        const csvE = parseFloat(block.querySelector('.csv-end').value);
+
+                        ws.setTime(s);
+                        // Trigger resize to fix any rendering issues in visible container
+                        setTimeout(() => {
+                            // Correct framing calculation as in initWaveform.updateView()
+                            const speakerData = speakerWaveforms[ws.speaker];
+                            if (speakerData) {
+                                const padding = (e - s) * 0.2;
+                                const viewStart = Math.max(0, s - padding);
+                                const viewEnd = Math.min(speakerData.duration, e + padding);
+                                const viewDuration = viewEnd - viewStart;
+                                const wsContainer = document.getElementById(`waveform-${index}`);
+                                const containerWidth = wsContainer.clientWidth || 800;
+                                const minPxPerSec = containerWidth / viewDuration;
+
+                                ws.zoom(minPxPerSec);
+
+                                const wrapper = ws.getWrapper();
+                                if (wrapper) {
+                                    let scrollable = wrapper;
+                                    while (scrollable && scrollable !== wsContainer) {
+                                        if (window.getComputedStyle(scrollable).overflowX === 'auto' ||
+                                            window.getComputedStyle(scrollable).overflowX === 'scroll' ||
+                                            scrollable.scrollWidth > scrollable.clientWidth) {
+                                            break;
+                                        }
+                                        scrollable = scrollable.parentElement;
+                                    }
+                                    if (scrollable) {
+                                        const scrollPos = viewStart * (wrapper.scrollWidth / speakerData.duration);
+                                        scrollable.scrollLeft = scrollPos;
+                                    }
+                                }
+                            }
+                        }, 50);
+                    }
+                });
+            } else {
+                container.classList.add('hidden');
+                icon.classList.remove('fa-minus-circle');
+                icon.classList.add('fa-plus-circle');
+            }
+        }
+
+        function getColorForSpeaker(speaker) {
+            if (!speakerColors[speaker]) {
+                const colors = [
+                    '#6366f1', '#ec4899', '#f59e0b', '#10b981', '#ef4444',
+                    '#8b5cf6', '#06b6d4', '#f97316', '#71717a', '#a855f7'
+                ];
+                const index = Object.keys(speakerColors).length % colors.length;
+                speakerColors[speaker] = colors[index];
+            }
+            return speakerColors[speaker];
+        }
+
         async function showStep3(results) {
             document.getElementById('step2').classList.add('hidden');
             document.getElementById('step3').classList.remove('hidden');
             
+            // Handle video if exists
+            const videoContainer = document.getElementById('videoContainer');
+            const video = document.getElementById('projectVideo');
+            if (currentVideoFile) {
+                videoContainer.classList.remove('hidden');
+                video.src = `/api/video/${currentJobId}`;
+            } else {
+                videoContainer.classList.add('hidden');
+            }
+
             const list = document.getElementById('segmentList');
             list.innerHTML = '';
 
@@ -549,7 +832,13 @@
                 }
             }));
 
+            // Update total duration for timeline
+            const totalDuration = currentMetadata.stats.total_duration;
+            document.getElementById('timelineDurationLabel').textContent =
+                Math.floor(totalDuration / 60) + ":" + (totalDuration % 60).toFixed(0).padStart(2, '0');
+
             results.forEach((seg, index) => {
+                const speakerColor = getColorForSpeaker(seg.speaker);
                 const confidenceClass = seg.confidence > 0.7 ? 'border-green-500' :
                                        seg.confidence > 0.4 ? 'border-yellow-500' :
                                        'border-red-500';
@@ -563,7 +852,7 @@
                             <button onclick="previewSegment(this, '${seg.speaker}', ${index})" class="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 hover:bg-indigo-600 hover:text-white transition-colors">
                                 <i class="fas fa-play"></i>
                             </button>
-                            <span class="font-bold text-indigo-900">${seg.speaker}</span>
+                            <span class="font-bold" style="color: ${speakerColor}">${seg.speaker}</span>
                             <span class="text-sm text-gray-600 italic truncate max-w-md" title="${seg.text_ro}">${seg.text_ro}</span>
                         </div>
                         <div class="flex items-center space-x-6 text-sm">
@@ -601,12 +890,167 @@
                 initWaveform(index, seg.speaker, seg.source_start, seg.source_end);
             });
 
+            renderProjectTimeline();
+
             // Export functionality
             document.getElementById('exportCsvBtn').onclick = () => exportResults('csv');
             document.getElementById('exportJsonBtn').onclick = () => exportResults('json');
         }
 
         let waveforms = {};
+
+        function renderProjectTimeline() {
+            const timeline = document.getElementById('projectTimeline');
+            const totalDuration = currentMetadata.stats.total_duration;
+            timeline.innerHTML = '';
+
+            const blocks = Array.from(document.querySelectorAll('#segmentList > div'));
+
+            blocks.forEach((block, index) => {
+                const speaker = block.querySelector('.font-bold').textContent;
+                const start = parseFloat(block.querySelector('.csv-start').value);
+                const end = parseFloat(block.querySelector('.csv-end').value);
+                const text = block.querySelector('.italic').textContent;
+
+                const blockEl = document.createElement('div');
+                blockEl.className = 'timeline-block';
+                blockEl.id = `timeline-block-${index}`;
+                blockEl.style.left = (start / totalDuration * 100) + '%';
+                blockEl.style.width = ((end - start) / totalDuration * 100) + '%';
+                blockEl.style.backgroundColor = getColorForSpeaker(speaker);
+                blockEl.title = `${speaker}: ${text}`;
+                blockEl.dataset.index = index;
+
+                // Create inner content with label and waveform canvas
+                const label = document.createElement('span');
+                label.textContent = speaker;
+                blockEl.appendChild(label);
+
+                const canvas = document.createElement('canvas');
+                blockEl.appendChild(canvas);
+
+                // Draw Waveform for segment
+                const drawWaveform = () => {
+                    const speakerData = speakerWaveforms[speaker];
+                    if (!speakerData || !speakerData.peaks) return;
+
+                    const sStart = parseFloat(block.querySelector('.source-start').value);
+                    const sEnd = parseFloat(block.querySelector('.source-end').value);
+
+                    const totalPeaks = speakerData.peaks.length;
+                    const peakStart = Math.max(0, Math.floor((sStart / speakerData.duration) * totalPeaks));
+                    const peakEnd = Math.min(totalPeaks, Math.ceil((sEnd / speakerData.duration) * totalPeaks));
+
+                    const segmentPeaks = speakerData.peaks.slice(peakStart, peakEnd);
+                    if (segmentPeaks.length === 0) return;
+
+                    const maxPeak = Math.max(...segmentPeaks, 0.01);
+
+                    canvas.width = blockEl.offsetWidth || 200;
+                    canvas.height = blockEl.offsetHeight || 60;
+                    const ctx = canvas.getContext('2d');
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+
+                    const step = Math.max(1, Math.floor(segmentPeaks.length / canvas.width));
+                    const barWidth = Math.max(1, canvas.width / (segmentPeaks.length / step));
+
+                    for (let i = 0; i < segmentPeaks.length; i += step) {
+                        const peak = segmentPeaks[i] / maxPeak;
+                        const h = peak * canvas.height * 0.8;
+                        const x = (i / segmentPeaks.length) * canvas.width;
+                        const y = (canvas.height - h) / 2;
+                        ctx.fillRect(x, y, barWidth, h);
+                    }
+                };
+
+                // Add listener to timing inputs to re-draw
+                block.querySelectorAll('.source-start, .source-end, .tempo').forEach(inp => {
+                    inp.addEventListener('input', () => {
+                        // Debounce slightly if needed
+                        drawWaveform();
+                    });
+                });
+
+                // Dragging logic
+                let isDragging = false;
+                let startX, startLeft;
+
+                blockEl.addEventListener('mousedown', (e) => {
+                    isDragging = true;
+                    startX = e.clientX;
+                    startLeft = parseFloat(blockEl.style.left);
+                    blockEl.classList.add('active');
+
+                    const onMouseMove = (e) => {
+                        if (!isDragging) return;
+                        const dx = e.clientX - startX;
+                        const timelineWidth = timeline.clientWidth;
+                        const deltaPercent = (dx / timelineWidth) * 100;
+                        let newLeft = startLeft + deltaPercent;
+
+                        // Boundaries
+                        const widthPercent = parseFloat(blockEl.style.width);
+                        if (newLeft < 0) newLeft = 0;
+                        if (newLeft + widthPercent > 100) newLeft = 100 - widthPercent;
+
+                        blockEl.style.left = newLeft + '%';
+
+                        // Update inputs
+                        const newStart = (newLeft / 100) * totalDuration;
+                        const newEnd = newStart + ((widthPercent / 100) * totalDuration);
+
+                        // Use silent update for inputs to avoid recursive render
+                        const csvStartInput = block.querySelector('.csv-start');
+                        const csvEndInput = block.querySelector('.csv-end');
+                        csvStartInput.value = newStart.toFixed(2);
+                        csvEndInput.value = newEnd.toFixed(2);
+
+                        // Trigger input event to sync with other UI elements
+                        csvStartInput.dispatchEvent(new Event('input', { bubbles: true }));
+                        csvEndInput.dispatchEvent(new Event('input', { bubbles: true }));
+                    };
+
+                    const onMouseUp = () => {
+                        isDragging = false;
+                        blockEl.classList.remove('active');
+                        document.removeEventListener('mousemove', onMouseMove);
+                        document.removeEventListener('mouseup', onMouseUp);
+                    };
+
+                    document.addEventListener('mousemove', onMouseMove);
+                    document.addEventListener('mouseup', onMouseUp);
+                });
+
+                // Click to scroll to detailed segment
+                blockEl.addEventListener('click', (e) => {
+                    if (e.detail === 2) { // Double click to focus
+                        const container = document.getElementById('segmentListContainer');
+                        if (container.classList.contains('hidden')) toggleSegmentList();
+                        block.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        block.classList.add('bg-indigo-50');
+                        setTimeout(() => block.classList.remove('bg-indigo-50'), 2000);
+                    }
+                });
+
+                timeline.appendChild(blockEl);
+                // Draw after appending so clientWidth is available
+                drawWaveform();
+            });
+        }
+
+        function updateProjectTimelineBlock(index) {
+            const block = document.getElementById(`seg-${index}`);
+            const blockEl = document.getElementById(`timeline-block-${index}`);
+            const totalDuration = currentMetadata.stats.total_duration;
+            if (!block || !blockEl) return;
+
+            const start = parseFloat(block.querySelector('.csv-start').value);
+            const end = parseFloat(block.querySelector('.csv-end').value);
+
+            blockEl.style.left = (start / totalDuration * 100) + '%';
+            blockEl.style.width = ((end - start) / totalDuration * 100) + '%';
+        }
 
         function initWaveform(index, speaker, start, end) {
             const container = document.getElementById(`waveform-${index}`);
@@ -616,13 +1060,15 @@
 
             const ws = WaveSurfer.create({
                 container: container,
-                waveColor: '#cbd5e1',
-                progressColor: '#6366f1',
+                waveColor: '#475569',
+                progressColor: '#4f46e5',
                 height: 40,
                 interact: false,
                 peaks: [speakerData.peaks],
                 duration: speakerData.duration,
             });
+
+            ws.speaker = speaker; // Store speaker on the ws instance
 
             // Initialize Regions plugin
             const wsRegions = ws.registerPlugin(WaveSurfer.Regions.create());
@@ -630,13 +1076,17 @@
 
             waveforms[index] = ws;
 
+            const block = document.getElementById(`seg-${index}`);
+
             ws.on('ready', () => {
-                const s = parseFloat(block.querySelector('.source-start').value);
-                ws.setTime(s);
+                const sInput = block.querySelector('.source-start');
+                if (sInput) {
+                    const s = parseFloat(sInput.value);
+                    ws.setTime(s);
+                }
                 updateView();
             });
 
-            const block = document.getElementById(`seg-${index}`);
             const inputs = block.querySelectorAll('input');
 
             // Handle Region updates (dragging)
@@ -734,6 +1184,11 @@
             inputs.forEach(input => input.addEventListener('input', (e) => {
                 // updateView is called with fromInput=true to update region but NOT zoom/scroll
                 updateView(true);
+
+                // If CSV inputs changed, update project timeline block specifically
+                if (e.target.classList.contains('csv-start') || e.target.classList.contains('csv-end')) {
+                    updateProjectTimelineBlock(index);
+                }
             }));
 
             // Initial view update
@@ -741,8 +1196,10 @@
         }
 
         function previewSegment(btn, speaker, index) {
+            const video = document.getElementById('projectVideo');
             if (activeAudio) {
                 activeAudio.pause();
+                if (currentVideoFile) video.pause();
                 const oldBtn = activeAudio.btn;
                 if (oldBtn) oldBtn.innerHTML = '<i class="fas fa-play"></i>';
 
@@ -774,6 +1231,13 @@
                 audio.currentTime = start;
                 audio.play();
 
+                if (currentVideoFile) {
+                    const block = document.getElementById(`seg-${index}`);
+                    const csvStart = parseFloat(block.querySelector('.csv-start').value);
+                    video.currentTime = csvStart;
+                    video.play();
+                }
+
                 // Sync waveform progress
                 const ws = waveforms[index];
                 const duration = (end - start) / tempo;
@@ -787,6 +1251,7 @@
                 setTimeout(() => {
                     if (activeAudio === audio) {
                         audio.pause();
+                        if (currentVideoFile) video.pause();
                         btn.innerHTML = '<i class="fas fa-play"></i>';
                         activeAudio = null;
                         ws.setTime(start);
@@ -796,6 +1261,7 @@
 
             audio.addEventListener('ended', () => {
                 btn.innerHTML = '<i class="fas fa-play"></i>';
+                if (currentVideoFile) video.pause();
                 activeAudio = null;
             });
         }
@@ -940,7 +1406,7 @@
             // For each speaker, we need to enforce no-overlap
             const speakerBlocks = {};
             blocks.forEach(block => {
-                const speaker = block.querySelector('.text-indigo-900').textContent;
+                const speaker = block.querySelector('.font-bold').textContent;
                 if (!speakerBlocks[speaker]) speakerBlocks[speaker] = [];
                 speakerBlocks[speaker].push(block);
             });
@@ -993,11 +1459,24 @@
             showToast(`Adjusted all segments: ${startDelta !== 0 ? 'In ' + (startDelta > 0 ? '+' : '') + startDelta + 's' : ''} ${endDelta !== 0 ? 'Out ' + (endDelta > 0 ? '+' : '') + endDelta + 's' : ''}`, 'success');
         }
 
+        let previewActive = false;
         async function previewProject() {
+            if (previewActive) {
+                previewActive = false;
+                if (activeAudio) {
+                    activeAudio.pause();
+                    activeAudio = null;
+                }
+                document.getElementById('projectVideo').pause();
+                return;
+            }
+
+            previewActive = true;
+            const video = document.getElementById('projectVideo');
             const blocks = Array.from(document.querySelectorAll('#segmentList > div'));
             const segments = blocks.map((block, index) => ({
                 index,
-                speaker: block.querySelector('.text-indigo-900').textContent,
+                speaker: block.querySelector('.font-bold').textContent,
                 csv_start: parseFloat(block.querySelector('.csv-start').value),
                 source_start: parseFloat(block.querySelector('.source-start').value),
                 source_end: parseFloat(block.querySelector('.source-end').value),
@@ -1008,29 +1487,44 @@
             // Sort by target timecode (chronological order of final output)
             segments.sort((a, b) => a.csv_start - b.csv_start);
 
-            if (segments.length === 0) return;
+            if (segments.length === 0) {
+                previewActive = false;
+                return;
+            }
 
-            showToast('Starting Project Preview (Sequential by CSV timecodes)', 'info');
+            showToast('Starting Project Preview (Sequential)', 'info');
 
             for (const seg of segments) {
+                if (!previewActive) break;
+
                 // Flash the segment block
                 const el = document.getElementById(`seg-${seg.index}`);
-                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                if (!document.getElementById('segmentListContainer').classList.contains('hidden')) {
+                    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
                 el.classList.add('bg-indigo-50');
 
+                // Update Project Timeline Active State
+                document.querySelectorAll('.timeline-block').forEach(b => b.classList.remove('active'));
+                const timelineBlock = document.querySelector(`.timeline-block[data-index="${seg.index}"]`);
+                if (timelineBlock) timelineBlock.classList.add('active');
+
                 // Play and wait
-                await new Promise(resolve => {
-                    const duration = (seg.source_end - seg.source_start) / seg.tempo;
-                    previewSegment(seg.btn, seg.speaker, seg.index);
+                const duration = (seg.source_end - seg.source_start) / seg.tempo;
+                previewSegment(seg.btn, seg.speaker, seg.index);
 
-                    setTimeout(() => {
-                        el.classList.remove('bg-indigo-50');
-                        resolve();
-                    }, (duration * 1000) + 200); // 200ms gap
-                });
+                await new Promise(resolve => setTimeout(resolve, (duration * 1000) + 200));
 
-                if (activeAudio === null) break; // Interrupted
+                el.classList.remove('bg-indigo-50');
+
+                if (activeAudio === null && previewActive) {
+                    // This means the segment was stopped manually or failed to start
+                    previewActive = false;
+                }
             }
+
+            previewActive = false;
+            document.querySelectorAll('.timeline-block').forEach(b => b.classList.remove('active'));
         }
 
         async function realignFromHere(speaker, index, btn) {
