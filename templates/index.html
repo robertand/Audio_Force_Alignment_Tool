@@ -389,6 +389,54 @@
             }
         }
 
+        // Chunked file upload helper
+        async function uploadFileInChunks(file, onProgress) {
+            const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB
+            const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+            const fileId = Date.now().toString() + '-' + Math.random().toString(36).substring(2, 9);
+
+            for (let i = 0; i < totalChunks; i++) {
+                const start = i * CHUNK_SIZE;
+                const end = Math.min(file.size, start + CHUNK_SIZE);
+                const chunk = file.slice(start, end);
+
+                const formData = new FormData();
+                formData.append('file_id', fileId);
+                formData.append('chunk_index', i);
+                formData.append('total_chunks', totalChunks);
+                formData.append('filename', file.name);
+                formData.append('chunk', chunk);
+
+                const response = await fetch('/api/upload-chunk', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                if (!result.success) throw new Error(result.error);
+
+                if (onProgress) {
+                    onProgress(((i + 1) / totalChunks) * 100);
+                }
+            }
+
+            // Merge chunks
+            const mergeResponse = await fetch('/api/merge-chunks', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    file_id: fileId,
+                    filename: file.name,
+                    total_chunks: totalChunks
+                })
+            });
+
+            const mergeResult = await mergeResponse.json();
+            if (!mergeResult.success) throw new Error(mergeResult.error);
+
+            return mergeResult.filename; // Returns the server-side unique filename
+        }
+
         // Toast notification
         function showToast(message, type = 'info') {
             const toast = document.getElementById('toast');
@@ -419,7 +467,6 @@
         // Metadata form submission
         document.getElementById('metadataFile').addEventListener('change', (e) => {
             const fileName = e.target.files[0] ? e.target.files[0].name : '';
-            // Could show filename somewhere if needed
         });
 
         document.getElementById('videoFile').addEventListener('change', (e) => {
@@ -439,16 +486,21 @@
                 return;
             }
 
-            const formData = new FormData();
-            formData.append('metadata', file);
-
             try {
                 document.getElementById('analyzeBtn').disabled = true;
+                document.getElementById('analyzeBtn').innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Uploading...';
+
+                // Use chunked upload for metadata
+                const serverFilename = await uploadFileInChunks(file, (p) => {
+                    document.getElementById('analyzeBtn').innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i>Uploading ${Math.round(p)}%`;
+                });
+
                 document.getElementById('analyzeBtn').innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Analyzing...';
 
                 const response = await fetch('/api/upload-metadata', {
                     method: 'POST',
-                    body: formData
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ server_filename: serverFilename })
                 });
                 
                 const result = await response.json();
@@ -545,41 +597,67 @@
                 return;
             }
 
-            const formData = new FormData();
-            formData.append('segments', JSON.stringify(currentMetadata.segments));
-            formData.append('use_whisperx', aligner === 'whisperx');
-            formData.append('use_whisper', aligner === 'whisper');
-            formData.append('whisper_model', document.getElementById('whisperModel').value);
-            formData.append('initial_prompt', document.getElementById('initialPrompt').value);
-
-            if (currentVideoFile) {
-                formData.append('video', currentVideoFile);
-            }
-
-            let hasAudio = false;
-            selects.forEach(select => {
-                const speaker = select.getAttribute('data-speaker');
-                const input = document.querySelector(`.audio-input[data-speaker="${speaker}"]`);
-                if (input.files[0]) {
-                    formData.append(`audio_${speaker}`, input.files[0]);
-                    hasAudio = true;
-                }
-                formData.append('speakers', speaker);
-            });
-
-            if (!hasAudio) {
-                showToast('Upload at least one audio file', 'error');
-                return;
-            }
-
-            // Show progress
+            // Show initial upload status
             document.getElementById('progressBar').classList.remove('hidden');
             document.getElementById('processBtn').disabled = true;
+            document.getElementById('progressStatus').innerText = "Preparing uploads...";
 
             try {
+                const audioFilesData = {};
+                const speakersList = [];
+                let videoServerFilename = null;
+
+                // 1. Upload Video if exists (Chunked)
+                if (currentVideoFile) {
+                    document.getElementById('progressStatus').innerText = "Uploading video...";
+                    videoServerFilename = await uploadFileInChunks(currentVideoFile, (p) => {
+                        document.getElementById('progressFill').style.width = p + '%';
+                        document.getElementById('progressPercentage').innerText = Math.round(p) + '%';
+                    });
+                }
+
+                // 2. Upload Character Audio Files (Chunked)
+                let audioUploadedCount = 0;
+                const selectedSelects = Array.from(selects);
+
+                for (const select of selectedSelects) {
+                    const speaker = select.getAttribute('data-speaker');
+                    const input = document.querySelector(`.audio-input[data-speaker="${speaker}"]`);
+                    speakersList.push(speaker);
+
+                    if (input.files[0]) {
+                        document.getElementById('progressStatus').innerText = `Uploading audio for ${speaker}...`;
+                        const audioFilename = await uploadFileInChunks(input.files[0], (p) => {
+                            document.getElementById('progressFill').style.width = p + '%';
+                            document.getElementById('progressPercentage').innerText = Math.round(p) + '%';
+                        });
+                        audioFilesData[speaker] = audioFilename;
+                        audioUploadedCount++;
+                    }
+                }
+
+                if (audioUploadedCount === 0) {
+                    showToast('Upload at least one audio file', 'error');
+                    document.getElementById('progressBar').classList.add('hidden');
+                    document.getElementById('processBtn').disabled = false;
+                    return;
+                }
+
+                // 3. Trigger Process with Server Filenames
+                document.getElementById('progressStatus').innerText = "Starting alignment...";
                 const response = await fetch('/api/process', {
                     method: 'POST',
-                    body: formData
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        segments: currentMetadata.segments,
+                        use_whisperx: aligner === 'whisperx',
+                        use_whisper: aligner === 'whisper',
+                        whisper_model: document.getElementById('whisperModel').value,
+                        initial_prompt: document.getElementById('initialPrompt').value,
+                        video_filename: videoServerFilename,
+                        audio_filenames: audioFilesData,
+                        speakers: speakersList
+                    })
                 });
 
                 const result = await response.json();
