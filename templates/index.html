@@ -60,6 +60,23 @@
             transition: transform 0.1s;
         }
 
+        .timeline-block canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            opacity: 0.5;
+        }
+
+        .timeline-block span {
+            position: relative;
+            z-index: 10;
+            font-weight: bold;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+        }
+
         .timeline-block:active {
             cursor: grabbing;
             transform: scale(1.02);
@@ -301,8 +318,8 @@
                 </div>
 
                 <!-- Video Section -->
-                <div id="videoContainer" class="hidden mb-6 bg-black rounded-xl overflow-hidden shadow-inner aspect-video max-h-[500px] flex items-center justify-center">
-                    <video id="projectVideo" class="max-h-full" controls></video>
+                <div id="videoContainer" class="hidden mb-6 bg-black rounded-xl overflow-hidden shadow-inner w-[100vw] relative left-1/2 -translate-x-1/2 flex items-center justify-center">
+                    <video id="projectVideo" class="w-full h-auto" controls></video>
                 </div>
 
                 <!-- Project Timeline -->
@@ -726,10 +743,44 @@
                     if (ws) {
                         const block = document.getElementById(`seg-${index}`);
                         const s = parseFloat(block.querySelector('.source-start').value);
+                        const e = parseFloat(block.querySelector('.source-end').value);
+                        const csvS = parseFloat(block.querySelector('.csv-start').value);
+                        const csvE = parseFloat(block.querySelector('.csv-end').value);
+
                         ws.setTime(s);
                         // Trigger resize to fix any rendering issues in visible container
-                        setTimeout(() => ws.drawer.containerWidth = 0, 0);
-                        setTimeout(() => ws.zoom(ws.params.minPxPerSec), 50);
+                        setTimeout(() => {
+                            // Correct framing calculation as in initWaveform.updateView()
+                            const speakerData = speakerWaveforms[ws.speaker];
+                            if (speakerData) {
+                                const padding = (e - s) * 0.2;
+                                const viewStart = Math.max(0, s - padding);
+                                const viewEnd = Math.min(speakerData.duration, e + padding);
+                                const viewDuration = viewEnd - viewStart;
+                                const wsContainer = document.getElementById(`waveform-${index}`);
+                                const containerWidth = wsContainer.clientWidth || 800;
+                                const minPxPerSec = containerWidth / viewDuration;
+
+                                ws.zoom(minPxPerSec);
+
+                                const wrapper = ws.getWrapper();
+                                if (wrapper) {
+                                    let scrollable = wrapper;
+                                    while (scrollable && scrollable !== wsContainer) {
+                                        if (window.getComputedStyle(scrollable).overflowX === 'auto' ||
+                                            window.getComputedStyle(scrollable).overflowX === 'scroll' ||
+                                            scrollable.scrollWidth > scrollable.clientWidth) {
+                                            break;
+                                        }
+                                        scrollable = scrollable.parentElement;
+                                    }
+                                    if (scrollable) {
+                                        const scrollPos = viewStart * (wrapper.scrollWidth / speakerData.duration);
+                                        scrollable.scrollLeft = scrollPos;
+                                    }
+                                }
+                            }
+                        }, 50);
                     }
                 });
             } else {
@@ -868,8 +919,58 @@
                 blockEl.style.width = ((end - start) / totalDuration * 100) + '%';
                 blockEl.style.backgroundColor = getColorForSpeaker(speaker);
                 blockEl.title = `${speaker}: ${text}`;
-                blockEl.textContent = speaker;
                 blockEl.dataset.index = index;
+
+                // Create inner content with label and waveform canvas
+                const label = document.createElement('span');
+                label.textContent = speaker;
+                blockEl.appendChild(label);
+
+                const canvas = document.createElement('canvas');
+                blockEl.appendChild(canvas);
+
+                // Draw Waveform for segment
+                const drawWaveform = () => {
+                    const speakerData = speakerWaveforms[speaker];
+                    if (!speakerData || !speakerData.peaks) return;
+
+                    const sStart = parseFloat(block.querySelector('.source-start').value);
+                    const sEnd = parseFloat(block.querySelector('.source-end').value);
+
+                    const totalPeaks = speakerData.peaks.length;
+                    const peakStart = Math.max(0, Math.floor((sStart / speakerData.duration) * totalPeaks));
+                    const peakEnd = Math.min(totalPeaks, Math.ceil((sEnd / speakerData.duration) * totalPeaks));
+
+                    const segmentPeaks = speakerData.peaks.slice(peakStart, peakEnd);
+                    if (segmentPeaks.length === 0) return;
+
+                    const maxPeak = Math.max(...segmentPeaks, 0.01);
+
+                    canvas.width = blockEl.offsetWidth || 200;
+                    canvas.height = blockEl.offsetHeight || 60;
+                    const ctx = canvas.getContext('2d');
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+
+                    const step = Math.max(1, Math.floor(segmentPeaks.length / canvas.width));
+                    const barWidth = Math.max(1, canvas.width / (segmentPeaks.length / step));
+
+                    for (let i = 0; i < segmentPeaks.length; i += step) {
+                        const peak = segmentPeaks[i] / maxPeak;
+                        const h = peak * canvas.height * 0.8;
+                        const x = (i / segmentPeaks.length) * canvas.width;
+                        const y = (canvas.height - h) / 2;
+                        ctx.fillRect(x, y, barWidth, h);
+                    }
+                };
+
+                // Add listener to timing inputs to re-draw
+                block.querySelectorAll('.source-start, .source-end, .tempo').forEach(inp => {
+                    inp.addEventListener('input', () => {
+                        // Debounce slightly if needed
+                        drawWaveform();
+                    });
+                });
 
                 // Dragging logic
                 let isDragging = false;
@@ -933,6 +1034,8 @@
                 });
 
                 timeline.appendChild(blockEl);
+                // Draw after appending so clientWidth is available
+                drawWaveform();
             });
         }
 
@@ -957,13 +1060,15 @@
 
             const ws = WaveSurfer.create({
                 container: container,
-                waveColor: '#cbd5e1',
-                progressColor: '#6366f1',
+                waveColor: '#475569',
+                progressColor: '#4f46e5',
                 height: 40,
                 interact: false,
                 peaks: [speakerData.peaks],
                 duration: speakerData.duration,
             });
+
+            ws.speaker = speaker; // Store speaker on the ws instance
 
             // Initialize Regions plugin
             const wsRegions = ws.registerPlugin(WaveSurfer.Regions.create());
