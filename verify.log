@@ -1,0 +1,12 @@
+WaveSurfer defined in page: true
+PAGE LOG: Failed to load resource: the server responded with a status of 404 (NOT FOUND)
+PAGE LOG: Failed to load resource: the server responded with a status of 404 (NOT FOUND)
+PAGE LOG: renderProjectTimeline called {container: true, results: 2}
+PAGE LOG: Initializing WaveSurfer with duration: 60
+PAGE LOG: WaveSurfer instance created: true
+PAGE LOG: Regions plugin registered: true
+PAGE LOG: Rendering 2 regions on timeline...
+Container HTML structure length: 11
+Container HTML snippet: <div></div>
+Regions found in DOM: 0
+Synced CSV Start: 10.00

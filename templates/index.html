@@ -70,6 +70,13 @@
             pointer-events: none;
             white-space: nowrap;
         }
+
+        /* Ensure timeline regions are always visible regardless of WaveSurfer internals */
+        [part="region"], .wavesurfer-region {
+            border: 2px solid rgba(0,0,0,0.2) !important;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
+            z-index: 10 !important;
+        }
     </style>
 </head>
 <body class="bg-gray-50 min-h-screen">
@@ -260,8 +267,14 @@
                 </div>
 
                 <div id="timelineView" class="hidden space-y-8">
-                    <div id="speakerTimelines" class="space-y-12">
-                        <!-- Speaker timelines will be added dynamically -->
+                    <div id="projectTimeline" class="bg-white rounded-xl shadow-lg p-6 border border-gray-100">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="text-lg font-bold text-gray-800">Project Timeline (CSV Timecodes)</h3>
+                            <div class="text-xs text-gray-500 uppercase tracking-widest font-semibold">
+                                Drag or resize blocks to adjust CSV timing
+                            </div>
+                        </div>
+                        <div id="timeline-ws-project" class="w-full h-48 bg-gray-50 rounded-lg overflow-hidden border border-gray-200 shadow-inner relative"></div>
                     </div>
                 </div>
 
@@ -349,7 +362,7 @@
         let activeAudio = null;
         let speakerWaveforms = {}; // Cache for speaker waveform peaks
         let currentView = 'detailed';
-        let speakerTimelines = {}; // Store WaveSurfer instances for timeline view
+        let projectWS = null;
 
         function toggleView(view) {
             currentView = view;
@@ -364,14 +377,19 @@
                 detailedView.classList.remove('hidden');
                 timelineView.classList.add('hidden');
 
-                // When returning to detailed view, update inputs from current jobAlignmentResults
+                // When returning to detailed view, update ALL inputs from current jobAlignmentResults
                 if (jobAlignmentResults) {
                     jobAlignmentResults.forEach((seg, index) => {
                         const block = document.getElementById(`seg-${index}`);
                         if (block) {
+                            block.querySelector('.csv-start').value = seg.csv_start.toFixed(2);
+                            block.querySelector('.csv-end').value = seg.csv_end.toFixed(2);
                             block.querySelector('.source-start').value = seg.source_start.toFixed(2);
                             block.querySelector('.source-end').value = seg.source_end.toFixed(2);
-                            block.querySelector('.source-start').dispatchEvent(new Event('input'));
+                            block.querySelector('.tempo').value = (seg.tempo || 1.0).toFixed(2);
+
+                            // Dispatch event to refresh waveform view and delta labels
+                            block.querySelector('.source-start').dispatchEvent(new Event('input', { bubbles: true }));
                         }
                     });
                 }
@@ -380,90 +398,149 @@
                 detailedBtn.className = 'px-4 py-1.5 rounded-md text-sm font-bold transition-all text-gray-600 hover:text-indigo-600';
                 detailedView.classList.add('hidden');
                 timelineView.classList.remove('hidden');
-                renderTimelineView();
+                renderProjectTimeline();
             }
         }
 
-        async function renderTimelineView() {
-            const container = document.getElementById('speakerTimelines');
-            container.innerHTML = '';
+        async function renderProjectTimeline() {
+            const container = document.getElementById('timeline-ws-project');
+            console.log('renderProjectTimeline called', { container: !!container, results: jobAlignmentResults ? jobAlignmentResults.length : 'null' });
+            if (!container || !jobAlignmentResults) return;
 
-            // Clean up old instances
-            Object.values(speakerTimelines).forEach(ws => ws.destroy());
-            speakerTimelines = {};
+            // Clean up old instance
+            if (projectWS) {
+                try { projectWS.destroy(); } catch(e) {}
+            }
+
+            // Project duration is max of all csv_end
+            const maxCsvEnd = jobAlignmentResults.length > 0 ? Math.max(...jobAlignmentResults.map(s => s.csv_end)) : 0;
+            const duration = Math.max(60, maxCsvEnd + 10);
+
+            console.log('Initializing WaveSurfer with duration:', duration);
+            const ws = WaveSurfer.create({
+                container: container,
+                waveColor: '#e2e8f0',
+                progressColor: 'transparent',
+                height: 192,
+                duration: duration,
+                interact: true,
+                cursorWidth: 1,
+                cursorColor: '#6366f1',
+                fillParent: true,
+                minPxPerSec: 1 // Ensure it's visible even without zoom
+            });
+
+            console.log('WaveSurfer instance created:', !!ws);
+            const wsRegions = ws.registerPlugin(WaveSurfer.Regions.create());
+            console.log('Regions plugin registered:', !!wsRegions);
+            projectWS = ws;
+
+            const speakerColors = {};
+            const baseColors = [
+                'rgba(99, 102, 241, 0.3)', // Indigo
+                'rgba(16, 185, 129, 0.3)', // Emerald
+                'rgba(245, 158, 11, 0.3)', // Amber
+                'rgba(239, 68, 68, 0.3)',  // Red
+                'rgba(139, 92, 246, 0.3)', // Violet
+                'rgba(236, 72, 153, 0.3)'  // Pink
+            ];
 
             const speakers = [...new Set(jobAlignmentResults.map(s => s.speaker))];
+            speakers.forEach((s, i) => speakerColors[s] = baseColors[i % baseColors.length]);
 
-            for (const speaker of speakers) {
-                const speakerData = speakerWaveforms[speaker];
-                if (!speakerData) continue;
+            // Add regions for ALL segments at their CSV positions
+            console.log(`Rendering ${jobAlignmentResults.length} regions on timeline...`);
+            jobAlignmentResults.forEach((seg, index) => {
+                if (seg.csv_end <= seg.csv_start) {
+                    console.warn(`Skipping region ${index} due to invalid duration: ${seg.csv_start} to ${seg.csv_end}`);
+                    return;
+                }
+                const color = speakerColors[seg.speaker];
+                const speakerData = speakerWaveforms[seg.speaker];
 
-                const speakerDiv = document.createElement('div');
-                speakerDiv.className = 'bg-white rounded-xl shadow-lg p-6 border border-gray-100';
-                speakerDiv.innerHTML = `
-                    <div class="flex items-center justify-between mb-4">
-                        <div class="flex items-center space-x-3">
-                            <div class="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold">
-                                ${speaker[0].toUpperCase()}
-                            </div>
-                            <h3 class="text-lg font-bold text-gray-800">${speaker}</h3>
-                        </div>
-                        <div class="text-xs text-gray-500 uppercase tracking-widest font-semibold">
-                            Full Audio Timeline
-                        </div>
-                    </div>
-                    <div id="timeline-ws-${speaker.replace(/\s+/g, '-')}" class="w-full h-32 bg-gray-50 rounded-lg overflow-hidden border border-gray-200 shadow-inner"></div>
+                // Create mini waveform container
+                const content = document.createElement('div');
+                content.className = "w-full h-full relative p-1 pointer-events-none";
+                content.innerHTML = `
+                    <div class="text-[10px] font-bold text-gray-900 leading-none truncate mb-1">${seg.speaker}</div>
+                    <div class="mini-waveform w-full h-12 bg-white/30 rounded"></div>
+                    <div class="text-[10px] font-normal italic text-gray-700 leading-tight line-clamp-2 mt-1">${seg.text_ro}</div>
                 `;
-                container.appendChild(speakerDiv);
 
-                const ws = WaveSurfer.create({
-                    container: `#timeline-ws-${speaker.replace(/\s+/g, '-')}`,
-                    waveColor: '#cbd5e1',
-                    progressColor: '#6366f1',
-                    height: 128,
-                    peaks: [speakerData.peaks],
-                    duration: speakerData.duration,
-                    normalize: true,
-                    sampleRate: speakerData.sample_rate
+                const region = wsRegions.addRegion({
+                    id: `csv-region-${index}`,
+                    start: seg.csv_start,
+                    end: seg.csv_end,
+                    color: color,
+                    drag: true,
+                    resize: true,
+                    content: content
                 });
 
-                const wsRegions = ws.registerPlugin(WaveSurfer.Regions.create());
-                speakerTimelines[speaker] = ws;
+                // Force visibility for testing/debugging
+                if (region.element) {
+                    region.element.style.minWidth = '2px';
+                    region.element.style.zIndex = '10';
+                }
 
-                // Add regions for each segment of this speaker
-                jobAlignmentResults.forEach((seg, index) => {
-                    if (seg.speaker === speaker) {
-                        const content = document.createElement('div');
-                        content.className = "p-1 text-[10px] font-bold text-indigo-700 truncate pointer-events-none";
-                        content.innerText = `${index + 1}: ${seg.text_ro}`;
+                // Render mini waveform using canvas (more efficient than full WaveSurfer)
+                if (speakerData && speakerData.peaks) {
+                    setTimeout(() => {
+                        const miniWsContainer = content.querySelector('.mini-waveform');
+                        if (!miniWsContainer) return;
 
-                        const region = wsRegions.addRegion({
-                            id: `timeline-region-${index}`,
-                            start: seg.source_start,
-                            end: seg.source_end,
-                            color: 'rgba(99, 102, 241, 0.2)',
-                            drag: true,
-                            resize: true,
-                            content: content
-                        });
+                        const canvas = document.createElement('canvas');
+                        const width = miniWsContainer.offsetWidth || 200;
+                        const height = miniWsContainer.offsetHeight || 48;
+                        canvas.width = width;
+                        canvas.height = height;
+                        miniWsContainer.appendChild(canvas);
 
-                        // Add visual border to region
-                        region.element.style.borderLeft = '2px solid #6366f1';
-                        region.element.style.borderRight = '2px solid #6366f1';
+                        const ctx = canvas.getContext('2d');
+                        const startIdx = Math.floor((seg.source_start / speakerData.duration) * (speakerData.peaks.length / 2));
+                        const endIdx = Math.floor((seg.source_end / speakerData.duration) * (speakerData.peaks.length / 2));
+
+                        // Peaks are min/max pairs
+                        const slicedPeaks = speakerData.peaks.slice(startIdx * 2, endIdx * 2);
+
+                        ctx.fillStyle = '#475569';
+                        const step = width / (slicedPeaks.length / 2);
+                        for (let i = 0; i < slicedPeaks.length; i += 2) {
+                            const min = slicedPeaks[i];
+                            const max = slicedPeaks[i+1];
+                            const y1 = ((1 + min) * height) / 2;
+                            const y2 = ((1 + max) * height) / 2;
+                            ctx.fillRect((i/2) * step, y1, Math.max(1, step), y2 - y1);
+                        }
+                    }, 50);
+                }
+
+                // Add visual distinction
+                if (region.element) {
+                    region.element.style.border = '1px solid rgba(0,0,0,0.1)';
+                    region.element.style.borderRadius = '4px';
+                    region.element.style.overflow = 'hidden';
+                }
+            });
+
+            wsRegions.on('region-created', (region) => {
+                console.log(`Region created: ${region.id} at ${region.start}-${region.end}`);
+            });
+
+            wsRegions.on('region-updated', (region) => {
+                const index = parseInt(region.id.replace('csv-region-', ''));
+                if (!isNaN(index) && jobAlignmentResults[index]) {
+                    jobAlignmentResults[index].csv_start = region.start;
+                    jobAlignmentResults[index].csv_end = region.end;
+
+                    // Also update the UI labels if they exist
+                    const block = document.getElementById(`seg-${index}`);
+                    if (block) {
+                        block.querySelector('.csv-start').value = region.start.toFixed(2);
+                        block.querySelector('.csv-end').value = region.end.toFixed(2);
                     }
-                });
-
-                wsRegions.on('region-updated', (region) => {
-                    const index = parseInt(region.id.replace('timeline-region-', ''));
-                    jobAlignmentResults[index].source_start = region.start;
-                    jobAlignmentResults[index].source_end = region.end;
-
-                    // Update content snippet
-                    if (region.content) {
-                        region.content.innerText = `${index + 1}: ${jobAlignmentResults[index].text_ro}`;
-                    }
-                });
-            }
+                }
+            });
         }
 
         // Initialize
@@ -685,7 +762,7 @@
             }));
 
             if (currentView === 'timeline') {
-                renderTimelineView();
+                renderProjectTimeline();
             }
 
             results.forEach((seg, index) => {
