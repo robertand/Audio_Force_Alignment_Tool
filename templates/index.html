@@ -7,6 +7,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.min.js"></script>
     <script src="https://unpkg.com/wavesurfer.js@7/dist/plugins/regions.min.js"></script>
+    <script src="https://unpkg.com/wavesurfer.js@7/dist/plugins/timeline.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
         @keyframes pulse {
@@ -69,13 +70,6 @@
             color: white;
             pointer-events: none;
             white-space: nowrap;
-        }
-
-        /* Ensure timeline regions are always visible regardless of WaveSurfer internals */
-        [part="region"], .wavesurfer-region {
-            border: 2px solid rgba(0,0,0,0.2) !important;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
-            z-index: 10 !important;
         }
     </style>
 </head>
@@ -404,7 +398,6 @@
 
         async function renderProjectTimeline() {
             const container = document.getElementById('timeline-ws-project');
-            console.log('renderProjectTimeline called', { container: !!container, results: jobAlignmentResults ? jobAlignmentResults.length : 'null' });
             if (!container || !jobAlignmentResults) return;
 
             // Clean up old instance
@@ -416,23 +409,72 @@
             const maxCsvEnd = jobAlignmentResults.length > 0 ? Math.max(...jobAlignmentResults.map(s => s.csv_end)) : 0;
             const duration = Math.max(60, maxCsvEnd + 10);
 
-            console.log('Initializing WaveSurfer with duration:', duration);
-            const ws = WaveSurfer.create({
-                container: container,
-                waveColor: '#e2e8f0',
-                progressColor: 'transparent',
-                height: 192,
-                duration: duration,
-                interact: true,
-                cursorWidth: 1,
-                cursorColor: '#6366f1',
-                fillParent: true,
-                minPxPerSec: 1 // Ensure it's visible even without zoom
+            // STITCH GLOBAL WAVEFORM
+            // WaveSurfer 7 usually expects interleaved min/max pairs
+            const pointsPerSec = 100;
+            const totalSamples = Math.ceil(duration * pointsPerSec);
+            const globalPeaks = new Float32Array(totalSamples * 2);
+
+            jobAlignmentResults.forEach(seg => {
+                const speakerData = speakerWaveforms[seg.speaker];
+                if (!speakerData || !speakerData.peaks) return;
+
+                // Source peaks are likely single values (max abs) based on get_waveform_data implementation
+                const srcPointsPerSec = speakerData.peaks.length / speakerData.duration;
+                const startIdx = Math.floor(seg.source_start * srcPointsPerSec);
+                const endIdx = Math.floor(seg.source_end * srcPointsPerSec);
+
+                const segmentPeaks = speakerData.peaks.slice(startIdx, endIdx);
+                const targetStartIdx = Math.floor(seg.csv_start * pointsPerSec);
+                const tempo = parseFloat(seg.tempo || 1.0);
+                const targetDuration = (seg.source_end - seg.source_start) / tempo;
+                const targetEndIdx = targetStartIdx + Math.ceil(targetDuration * pointsPerSec);
+
+                // Place peaks in global array, simple stretching if needed
+                const targetLen = targetEndIdx - targetStartIdx;
+                for (let i = 0; i < targetLen; i++) {
+                    const targetIdx = (targetStartIdx + i) * 2;
+                    if (targetIdx + 1 >= globalPeaks.length) break;
+
+                    const srcIdx = Math.floor((i / targetLen) * segmentPeaks.length);
+                    const peakVal = segmentPeaks[srcIdx] || 0;
+
+                    // We store as [min, max]
+                    globalPeaks[targetIdx] = Math.min(globalPeaks[targetIdx], -peakVal);
+                    globalPeaks[targetIdx + 1] = Math.max(globalPeaks[targetIdx + 1], peakVal);
+                }
             });
 
-            console.log('WaveSurfer instance created:', !!ws);
+            // Use a tiny silent WAV data URI to ensure WaveSurfer 7 triggers rendering
+            const silentWav = "data:audio/wav;base64,UklGRigAAABXQVZFRm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAA==";
+
+            const ws = WaveSurfer.create({
+                container: container,
+                url: silentWav,
+                waveColor: '#4b5563', // Gray-600
+                progressColor: 'transparent',
+                height: 128,
+                duration: duration,
+                interact: true,
+                cursorWidth: 2,
+                cursorColor: '#6366f1',
+                fillParent: true,
+                minPxPerSec: 1,
+                barWidth: 2,
+                barGap: 1,
+                peaks: [globalPeaks]
+            });
+
             const wsRegions = ws.registerPlugin(WaveSurfer.Regions.create());
-            console.log('Regions plugin registered:', !!wsRegions);
+            ws.registerPlugin(WaveSurfer.Timeline.create({
+                height: 20,
+                insertPosition: 'beforebegin',
+                style: {
+                    fontSize: '10px',
+                    color: '#475569',
+                },
+            }));
+
             projectWS = ws;
 
             const speakerColors = {};
@@ -449,21 +491,15 @@
             speakers.forEach((s, i) => speakerColors[s] = baseColors[i % baseColors.length]);
 
             // Add regions for ALL segments at their CSV positions
-            console.log(`Rendering ${jobAlignmentResults.length} regions on timeline...`);
             jobAlignmentResults.forEach((seg, index) => {
-                if (seg.csv_end <= seg.csv_start) {
-                    console.warn(`Skipping region ${index} due to invalid duration: ${seg.csv_start} to ${seg.csv_end}`);
-                    return;
-                }
-                const color = speakerColors[seg.speaker];
-                const speakerData = speakerWaveforms[seg.speaker];
+                if (seg.csv_end <= seg.csv_start) return;
 
-                // Create mini waveform container
+                const color = speakerColors[seg.speaker];
+
                 const content = document.createElement('div');
                 content.className = "w-full h-full relative p-1 pointer-events-none";
                 content.innerHTML = `
                     <div class="text-[10px] font-bold text-gray-900 leading-none truncate mb-1">${seg.speaker}</div>
-                    <div class="mini-waveform w-full h-12 bg-white/30 rounded"></div>
                     <div class="text-[10px] font-normal italic text-gray-700 leading-tight line-clamp-2 mt-1">${seg.text_ro}</div>
                 `;
 
@@ -477,54 +513,11 @@
                     content: content
                 });
 
-                // Force visibility for testing/debugging
-                if (region.element) {
-                    region.element.style.minWidth = '2px';
-                    region.element.style.zIndex = '10';
-                }
-
-                // Render mini waveform using canvas (more efficient than full WaveSurfer)
-                if (speakerData && speakerData.peaks) {
-                    setTimeout(() => {
-                        const miniWsContainer = content.querySelector('.mini-waveform');
-                        if (!miniWsContainer) return;
-
-                        const canvas = document.createElement('canvas');
-                        const width = miniWsContainer.offsetWidth || 200;
-                        const height = miniWsContainer.offsetHeight || 48;
-                        canvas.width = width;
-                        canvas.height = height;
-                        miniWsContainer.appendChild(canvas);
-
-                        const ctx = canvas.getContext('2d');
-                        const startIdx = Math.floor((seg.source_start / speakerData.duration) * (speakerData.peaks.length / 2));
-                        const endIdx = Math.floor((seg.source_end / speakerData.duration) * (speakerData.peaks.length / 2));
-
-                        // Peaks are min/max pairs
-                        const slicedPeaks = speakerData.peaks.slice(startIdx * 2, endIdx * 2);
-
-                        ctx.fillStyle = '#475569';
-                        const step = width / (slicedPeaks.length / 2);
-                        for (let i = 0; i < slicedPeaks.length; i += 2) {
-                            const min = slicedPeaks[i];
-                            const max = slicedPeaks[i+1];
-                            const y1 = ((1 + min) * height) / 2;
-                            const y2 = ((1 + max) * height) / 2;
-                            ctx.fillRect((i/2) * step, y1, Math.max(1, step), y2 - y1);
-                        }
-                    }, 50);
-                }
-
-                // Add visual distinction
                 if (region.element) {
                     region.element.style.border = '1px solid rgba(0,0,0,0.1)';
                     region.element.style.borderRadius = '4px';
                     region.element.style.overflow = 'hidden';
                 }
-            });
-
-            wsRegions.on('region-created', (region) => {
-                console.log(`Region created: ${region.id} at ${region.start}-${region.end}`);
             });
 
             wsRegions.on('region-updated', (region) => {
@@ -533,7 +526,6 @@
                     jobAlignmentResults[index].csv_start = region.start;
                     jobAlignmentResults[index].csv_end = region.end;
 
-                    // Also update the UI labels if they exist
                     const block = document.getElementById(`seg-${index}`);
                     if (block) {
                         block.querySelector('.csv-start').value = region.start.toFixed(2);
