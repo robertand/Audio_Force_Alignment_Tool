@@ -223,6 +223,16 @@
                     <div class="flex items-center">
                         <div class="w-10 h-10 rounded-full gradient-bg text-white flex items-center justify-center font-bold mr-4">3</div>
                         <h2 class="text-2xl font-semibold">Review and Adjust Segments</h2>
+
+                        <!-- View Toggle -->
+                        <div class="ml-8 flex bg-gray-100 p-1 rounded-lg">
+                            <button id="viewDetailedBtn" onclick="toggleView('detailed')" class="px-4 py-1.5 rounded-md text-sm font-bold transition-all bg-white shadow text-indigo-600">
+                                <i class="fas fa-list mr-2"></i>Detailed
+                            </button>
+                            <button id="viewTimelineBtn" onclick="toggleView('timeline')" class="px-4 py-1.5 rounded-md text-sm font-bold transition-all text-gray-600 hover:text-indigo-600">
+                                <i class="fas fa-stream mr-2"></i>Timeline
+                            </button>
+                        </div>
                     </div>
                     <div class="flex space-x-2">
                         <button class="bg-indigo-600 text-white px-3 py-2 rounded-lg hover:bg-indigo-700 transition-colors text-xs font-bold" onclick="previewProject()">
@@ -243,8 +253,16 @@
                     </div>
                 </div>
 
-                <div id="segmentList" class="space-y-6">
-                    <!-- Segment blocks will be added dynamically -->
+                <div id="detailedView" class="space-y-6">
+                    <div id="segmentList" class="space-y-6">
+                        <!-- Segment blocks will be added dynamically -->
+                    </div>
+                </div>
+
+                <div id="timelineView" class="hidden space-y-8">
+                    <div id="speakerTimelines" class="space-y-12">
+                        <!-- Speaker timelines will be added dynamically -->
+                    </div>
                 </div>
 
                 <div class="mt-8 border-t pt-6">
@@ -330,6 +348,123 @@
         let jobAlignmentResults = null;
         let activeAudio = null;
         let speakerWaveforms = {}; // Cache for speaker waveform peaks
+        let currentView = 'detailed';
+        let speakerTimelines = {}; // Store WaveSurfer instances for timeline view
+
+        function toggleView(view) {
+            currentView = view;
+            const detailedBtn = document.getElementById('viewDetailedBtn');
+            const timelineBtn = document.getElementById('viewTimelineBtn');
+            const detailedView = document.getElementById('detailedView');
+            const timelineView = document.getElementById('timelineView');
+
+            if (view === 'detailed') {
+                detailedBtn.className = 'px-4 py-1.5 rounded-md text-sm font-bold transition-all bg-white shadow text-indigo-600';
+                timelineBtn.className = 'px-4 py-1.5 rounded-md text-sm font-bold transition-all text-gray-600 hover:text-indigo-600';
+                detailedView.classList.remove('hidden');
+                timelineView.classList.add('hidden');
+
+                // When returning to detailed view, update inputs from current jobAlignmentResults
+                if (jobAlignmentResults) {
+                    jobAlignmentResults.forEach((seg, index) => {
+                        const block = document.getElementById(`seg-${index}`);
+                        if (block) {
+                            block.querySelector('.source-start').value = seg.source_start.toFixed(2);
+                            block.querySelector('.source-end').value = seg.source_end.toFixed(2);
+                            block.querySelector('.source-start').dispatchEvent(new Event('input'));
+                        }
+                    });
+                }
+            } else {
+                timelineBtn.className = 'px-4 py-1.5 rounded-md text-sm font-bold transition-all bg-white shadow text-indigo-600';
+                detailedBtn.className = 'px-4 py-1.5 rounded-md text-sm font-bold transition-all text-gray-600 hover:text-indigo-600';
+                detailedView.classList.add('hidden');
+                timelineView.classList.remove('hidden');
+                renderTimelineView();
+            }
+        }
+
+        async function renderTimelineView() {
+            const container = document.getElementById('speakerTimelines');
+            container.innerHTML = '';
+
+            // Clean up old instances
+            Object.values(speakerTimelines).forEach(ws => ws.destroy());
+            speakerTimelines = {};
+
+            const speakers = [...new Set(jobAlignmentResults.map(s => s.speaker))];
+
+            for (const speaker of speakers) {
+                const speakerData = speakerWaveforms[speaker];
+                if (!speakerData) continue;
+
+                const speakerDiv = document.createElement('div');
+                speakerDiv.className = 'bg-white rounded-xl shadow-lg p-6 border border-gray-100';
+                speakerDiv.innerHTML = `
+                    <div class="flex items-center justify-between mb-4">
+                        <div class="flex items-center space-x-3">
+                            <div class="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold">
+                                ${speaker[0].toUpperCase()}
+                            </div>
+                            <h3 class="text-lg font-bold text-gray-800">${speaker}</h3>
+                        </div>
+                        <div class="text-xs text-gray-500 uppercase tracking-widest font-semibold">
+                            Full Audio Timeline
+                        </div>
+                    </div>
+                    <div id="timeline-ws-${speaker.replace(/\s+/g, '-')}" class="w-full h-32 bg-gray-50 rounded-lg overflow-hidden border border-gray-200 shadow-inner"></div>
+                `;
+                container.appendChild(speakerDiv);
+
+                const ws = WaveSurfer.create({
+                    container: `#timeline-ws-${speaker.replace(/\s+/g, '-')}`,
+                    waveColor: '#cbd5e1',
+                    progressColor: '#6366f1',
+                    height: 128,
+                    peaks: [speakerData.peaks],
+                    duration: speakerData.duration,
+                    normalize: true,
+                    sampleRate: speakerData.sample_rate
+                });
+
+                const wsRegions = ws.registerPlugin(WaveSurfer.Regions.create());
+                speakerTimelines[speaker] = ws;
+
+                // Add regions for each segment of this speaker
+                jobAlignmentResults.forEach((seg, index) => {
+                    if (seg.speaker === speaker) {
+                        const content = document.createElement('div');
+                        content.className = "p-1 text-[10px] font-bold text-indigo-700 truncate pointer-events-none";
+                        content.innerText = `${index + 1}: ${seg.text_ro}`;
+
+                        const region = wsRegions.addRegion({
+                            id: `timeline-region-${index}`,
+                            start: seg.source_start,
+                            end: seg.source_end,
+                            color: 'rgba(99, 102, 241, 0.2)',
+                            drag: true,
+                            resize: true,
+                            content: content
+                        });
+
+                        // Add visual border to region
+                        region.element.style.borderLeft = '2px solid #6366f1';
+                        region.element.style.borderRight = '2px solid #6366f1';
+                    }
+                });
+
+                wsRegions.on('region-updated', (region) => {
+                    const index = parseInt(region.id.replace('timeline-region-', ''));
+                    jobAlignmentResults[index].source_start = region.start;
+                    jobAlignmentResults[index].source_end = region.end;
+
+                    // Update content snippet
+                    if (region.content) {
+                        region.content.innerText = `${index + 1}: ${jobAlignmentResults[index].text_ro}`;
+                    }
+                });
+            }
+        }
 
         // Initialize
         loadSystemInfo();
@@ -549,6 +684,10 @@
                 }
             }));
 
+            if (currentView === 'timeline') {
+                renderTimelineView();
+            }
+
             results.forEach((seg, index) => {
                 const confidenceClass = seg.confidence > 0.7 ? 'border-green-500' :
                                        seg.confidence > 0.4 ? 'border-yellow-500' :
@@ -646,6 +785,10 @@
                 const startInput = block.querySelector('.source-start');
                 const endInput = block.querySelector('.source-end');
 
+                // Update data
+                jobAlignmentResults[index].source_start = region.start;
+                jobAlignmentResults[index].source_end = region.end;
+
                 // Update inputs
                 startInput.value = region.start.toFixed(2);
                 endInput.value = region.end.toFixed(2);
@@ -732,6 +875,19 @@
             };
 
             inputs.forEach(input => input.addEventListener('input', (e) => {
+                const s = parseFloat(block.querySelector('.source-start').value);
+                const eVal = parseFloat(block.querySelector('.source-end').value);
+                const csvS = parseFloat(block.querySelector('.csv-start').value);
+                const csvE = parseFloat(block.querySelector('.csv-end').value);
+                const tempo = parseFloat(block.querySelector('.tempo').value) || 1.0;
+
+                // Sync back to jobAlignmentResults
+                if (!isNaN(s)) jobAlignmentResults[index].source_start = s;
+                if (!isNaN(eVal)) jobAlignmentResults[index].source_end = eVal;
+                if (!isNaN(csvS)) jobAlignmentResults[index].csv_start = csvS;
+                if (!isNaN(csvE)) jobAlignmentResults[index].csv_end = csvE;
+                if (!isNaN(tempo)) jobAlignmentResults[index].tempo = tempo;
+
                 // updateView is called with fromInput=true to update region but NOT zoom/scroll
                 updateView(true);
             }));
