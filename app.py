@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify, send_file, send_from_directory
 import os
 import json
 import pandas as pd
@@ -30,6 +30,8 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'uploads'
+app.config['TUTORIAL_FOLDER'] = 'uploads/tutorials'
+app.config['DOCUMENT_FOLDER'] = 'uploads/documents'
 app.config['MAX_CONTENT_LENGTH'] = 1024 * 1024 * 1024  # 1GB max file size
 app.config['OUTPUT_FOLDER'] = 'outputs'
 app.config['MAX_FILES_PER_JOB'] = 20
@@ -38,6 +40,8 @@ app.config['JOB_TIMEOUT'] = 3600  # 1 hour
 
 # Create folders if they don't exist
 Path(app.config['UPLOAD_FOLDER']).mkdir(parents=True, exist_ok=True)
+Path(app.config['TUTORIAL_FOLDER']).mkdir(parents=True, exist_ok=True)
+Path(app.config['DOCUMENT_FOLDER']).mkdir(parents=True, exist_ok=True)
 Path(app.config['OUTPUT_FOLDER']).mkdir(parents=True, exist_ok=True)
 
 # Check GPU availability
@@ -837,6 +841,91 @@ def job_status(job_id):
             safe_job['output_files'] = job['output_files']
         
         return jsonify(safe_job)
+
+@app.route('/api/upload-tutorial', methods=['POST'])
+def upload_tutorial():
+    """Upload a video tutorial"""
+    try:
+        video_file = request.files.get('video')
+        if not video_file:
+            return jsonify({'success': False, 'error': 'No video file provided'}), 400
+
+        filename = secure_filename(video_file.filename)
+        filepath = os.path.join(app.config['TUTORIAL_FOLDER'], filename)
+        video_file.save(filepath)
+
+        return jsonify({
+            'success': True,
+            'filename': filename,
+            'message': 'Tutorial uploaded successfully'
+        })
+    except Exception as e:
+        logger.error(f"Upload tutorial error: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/upload-document', methods=['POST'])
+def upload_document():
+    """Upload a document (PDF, DOCX)"""
+    try:
+        doc_file = request.files.get('document')
+        if not doc_file:
+            return jsonify({'success': False, 'error': 'No document file provided'}), 400
+
+        filename = secure_filename(doc_file.filename)
+        filepath = os.path.join(app.config['DOCUMENT_FOLDER'], filename)
+        doc_file.save(filepath)
+
+        return jsonify({
+            'success': True,
+            'filename': filename,
+            'message': 'Document uploaded successfully'
+        })
+    except Exception as e:
+        logger.error(f"Upload document error: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/tutorials', methods=['GET'])
+def list_tutorials():
+    """List available video tutorials"""
+    try:
+        tutorials = []
+        for filename in os.listdir(app.config['TUTORIAL_FOLDER']):
+            if filename.lower().endswith(('.mp4', '.webm', '.ogg', '.mov')):
+                tutorials.append({
+                    'filename': filename,
+                    'url': f"/api/serve-tutorial/{filename}"
+                })
+        return jsonify({'success': True, 'tutorials': tutorials})
+    except Exception as e:
+        logger.error(f"List tutorials error: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/documents', methods=['GET'])
+def list_documents():
+    """List available documents"""
+    try:
+        documents = []
+        for filename in os.listdir(app.config['DOCUMENT_FOLDER']):
+            if filename.lower().endswith(('.pdf', '.docx')):
+                documents.append({
+                    'filename': filename,
+                    'url': f"/api/serve-document/{filename}",
+                    'type': 'pdf' if filename.lower().endswith('.pdf') else 'docx'
+                })
+        return jsonify({'success': True, 'documents': documents})
+    except Exception as e:
+        logger.error(f"List documents error: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/serve-tutorial/<filename>')
+def serve_tutorial(filename):
+    """Serve a tutorial video file"""
+    return send_from_directory(app.config['TUTORIAL_FOLDER'], secure_filename(filename))
+
+@app.route('/api/serve-document/<filename>')
+def serve_document(filename):
+    """Serve a document file"""
+    return send_from_directory(app.config['DOCUMENT_FOLDER'], secure_filename(filename))
 
 @app.route('/api/upload-metadata', methods=['POST'])
 def upload_metadata():

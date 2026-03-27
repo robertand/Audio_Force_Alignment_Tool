@@ -1,1114 +1,444 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ro">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Audio Force Alignment Tool</title>
+    <title>Tutorial Platform - Interfață Interactivă</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.min.js"></script>
-    <script src="https://unpkg.com/wavesurfer.js@7/dist/plugins/regions.min.js"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <style>
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-        .animate-pulse-slow {
-            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-        }
-        .gradient-bg {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        }
-        .glass-effect {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-        }
-
-        /* Custom WaveSurfer Regions Styling */
-        .wavesurfer-region {
-            border-left: 2px solid #ef4444 !important;
-            border-right: 2px solid #ef4444 !important;
-            background-color: rgba(239, 68, 68, 0.1) !important;
-        }
-
-        .wavesurfer-region-handle {
-            width: 14px !important;
-            max-width: 14px !important;
-            background-color: #ef4444 !important;
-            opacity: 1 !important;
-            z-index: 100 !important;
-            border: 1px solid white !important;
-        }
-
-        .wavesurfer-region-handle:hover {
-            background-color: #dc2626 !important;
-            cursor: col-resize;
-        }
-
-        .wavesurfer-region-handle-left::before {
-            content: 'IN';
-            position: absolute;
-            top: 0;
-            left: 50%;
-            transform: translateX(-50%);
-            font-size: 8px;
-            font-weight: 900;
-            color: white;
-            pointer-events: none;
-            white-space: nowrap;
-        }
-
-        .wavesurfer-region-handle-right::before {
-            content: 'OUT';
-            position: absolute;
-            bottom: 0;
-            left: 50%;
-            transform: translateX(-50%);
-            font-size: 8px;
-            font-weight: 900;
-            color: white;
-            pointer-events: none;
-            white-space: nowrap;
-        }
-    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"></script>
+    <script src="https://unpkg.com/mammoth@1.6.0/mammoth.browser.min.js"></script>
+    <link rel="stylesheet" href="/static/style.css">
 </head>
-<body class="bg-gray-50 min-h-screen">
-    <!-- Header -->
-    <header class="gradient-bg text-white shadow-lg">
-        <div class="container mx-auto px-4 py-6">
-            <div class="flex items-center justify-between">
-                <div class="flex items-center space-x-3">
-                    <i class="fas fa-wave-square text-3xl"></i>
-                    <h1 class="text-2xl font-bold">Audio Force Alignment Tool</h1>
-                </div>
-                <div id="systemInfo" class="flex items-center space-x-4 text-sm">
-                    <!-- System info will be loaded here -->
-                </div>
+<body class="bg-gray-100 min-h-screen flex flex-col">
+    <!-- Header Modern -->
+    <header class="bg-indigo-700 text-white shadow-md py-4 px-6 flex justify-between items-center">
+        <div class="flex items-center space-x-3">
+            <i class="fas fa-graduation-cap text-3xl"></i>
+            <h1 class="text-xl font-bold tracking-tight">Academia Digitală</h1>
+        </div>
+        <div class="flex items-center space-x-4">
+            <button onclick="showUploadModal()" class="bg-white text-indigo-700 px-4 py-2 rounded-lg font-semibold hover:bg-gray-100 transition-colors">
+                <i class="fas fa-plus mr-2"></i> Adaugă Conținut
+            </button>
+            <div id="systemStatus" class="text-xs opacity-80">
+                <!-- Status sistem -->
             </div>
         </div>
     </header>
 
-    <main class="container mx-auto px-4 py-8">
-        <!-- Step 1: Upload Metadata -->
-        <div id="step1" class="max-w-2xl mx-auto">
-            <div class="bg-white rounded-xl shadow-lg p-8">
-                <div class="flex items-center mb-6">
-                    <div class="w-10 h-10 rounded-full gradient-bg text-white flex items-center justify-center font-bold mr-4">1</div>
-                    <h2 class="text-2xl font-semibold">Upload Metadata</h2>
+    <div class="flex flex-1 overflow-hidden">
+        <!-- Sidebar - Navigare Tutoriale -->
+        <aside class="w-80 bg-white border-r border-gray-200 flex flex-col overflow-hidden shadow-inner">
+            <div class="p-4 border-b">
+                <h2 class="text-lg font-semibold text-gray-700">Bibliotecă</h2>
+                <div class="mt-2 relative">
+                    <input type="text" id="assetSearch" placeholder="Caută tutoriale..." class="w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm">
+                    <i class="fas fa-search absolute left-3 top-3 text-gray-400"></i>
                 </div>
-                
-                <form id="metadataForm" class="space-y-6">
-                    <div class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-indigo-500 transition-colors">
-                        <i class="fas fa-cloud-upload-alt text-4xl text-gray-400 mb-4"></i>
-                        <p class="text-gray-600 mb-2">Drag and drop your metadata file here</p>
-                        <p class="text-sm text-gray-500 mb-4">CSV or SRT format</p>
-                        <input type="file" id="metadataFile" accept=".csv,.srt" class="hidden" required>
-                        <button type="button" onclick="document.getElementById('metadataFile').click()" class="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700 transition-colors">
-                            Browse Files
-                        </button>
-                        <p class="mt-4 text-sm text-gray-500">CSV format: start,end,speaker,en,ro</p>
-                    </div>
-                    
-                    <button type="submit" class="w-full bg-indigo-600 text-white py-3 rounded-lg font-semibold hover:bg-indigo-700 transition-colors disabled:opacity-50" id="analyzeBtn">
-                        Analyze Metadata
-                    </button>
-                </form>
             </div>
-        </div>
 
-        <!-- Step 2: Character Audio Slots -->
-        <div id="step2" class="hidden max-w-4xl mx-auto">
-            <div class="bg-white rounded-xl shadow-lg p-8">
-                <div class="flex items-center justify-between mb-6">
-                    <div class="flex items-center">
-                        <div class="w-10 h-10 rounded-full gradient-bg text-white flex items-center justify-center font-bold mr-4">2</div>
-                        <h2 class="text-2xl font-semibold">Upload Character Audio</h2>
+            <div class="flex-1 overflow-y-auto p-2" id="assetLibrary">
+                <!-- Categorii și asset-uri -->
+                <div class="mb-4">
+                    <h3 class="px-3 py-2 text-xs font-bold text-gray-400 uppercase tracking-wider">Video Tutoriale</h3>
+                    <div id="tutorialList" class="space-y-1">
+                        <!-- Listă video -->
                     </div>
-                    <button onclick="resetProcess()" class="text-gray-500 hover:text-gray-700">
-                        <i class="fas fa-redo-alt"></i> Reset
-                    </button>
                 </div>
-
-                <div class="mb-6 p-4 bg-blue-50 rounded-lg" id="metadataInfo">
-                    <!-- Metadata info will be shown here -->
-                </div>
-
-                <form id="processForm" class="space-y-6">
-                    <div class="flex space-x-2 mb-4">
-                        <button type="button" onclick="toggleAllSpeakers(true)" class="px-3 py-1 bg-gray-200 rounded hover:bg-gray-300 text-sm">
-                            Select All
-                        </button>
-                        <button type="button" onclick="toggleAllSpeakers(false)" class="px-3 py-1 bg-gray-200 rounded hover:bg-gray-300 text-sm">
-                            Deselect All
-                        </button>
-                    </div>
-
-                    <div id="characterSlots" class="space-y-3">
-                        <!-- Character slots will be inserted here -->
-                    </div>
-
-                    <div class="border-t pt-6">
-                        <h3 class="text-lg font-semibold mb-4">Advanced Settings</h3>
-                        
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                            <div>
-                                <label class="block text-sm font-medium mb-1">Alignment Engine</label>
-                                <div class="space-y-2">
-                                    <label class="flex items-center">
-                                        <input type="radio" name="aligner" value="whisperx" checked class="mr-2">
-                                        <span>WhisperX (Ultra-exact timestamps, RO optimized)</span>
-                                    </label>
-                                    <label class="flex items-center">
-                                        <input type="radio" name="aligner" value="whisper" class="mr-2">
-                                        <span>Whisper (Standard accuracy)</span>
-                                    </label>
-                                    <label class="flex items-center">
-                                        <input type="radio" name="aligner" value="none" class="mr-2">
-                                        <span>No alignment (direct mapping)</span>
-                                    </label>
-                                </div>
-                            </div>
-                            
-                            <div class="space-y-3">
-                                <div>
-                                    <label class="block text-sm font-medium mb-1">Whisper Model</label>
-                                    <select id="whisperModel" class="w-full border rounded-lg px-3 py-2">
-                                        <optgroup label="WhisperX (Forced Alignment)">
-                                            <option value="large-v3" selected>OpenAI Large v3 (Exact Timestamps)</option>
-                                            <option value="large-v2">OpenAI Large v2</option>
-                                            <option value="medium">Medium</option>
-                                        </optgroup>
-                                        <optgroup label="Standard Whisper (Fine-tuned RO)">
-                                            <option value="TransferRapid/whisper-large-v3-turbo_ro">RO Turbo (Best for RO text)</option>
-                                            <option value="iRaduS/whisper-romanian-finetune">RO Finetune (iRaduS)</option>
-                                        </optgroup>
-                                        <optgroup label="Standard Whisper (Other)">
-                                            <option value="large-v3">Large v3</option>
-                                            <option value="small">Small</option>
-                                            <option value="base">Base</option>
-                                            <option value="tiny">Tiny</option>
-                                        </optgroup>
-                                    </select>
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-medium mb-1">Initial Prompt</label>
-                                    <input type="text" id="initialPrompt" class="w-full border rounded-lg px-3 py-2" placeholder="e.g., Dialogue in Romanian">
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <button type="submit" class="w-full bg-green-600 text-white py-3 rounded-lg font-semibold hover:bg-green-700 transition-colors disabled:opacity-50" id="processBtn">
-                        Process Selected Characters
-                    </button>
-                </form>
-
-                <!-- Progress Bar -->
-                <div id="progressBar" class="hidden mt-6">
-                    <div class="flex items-center justify-between mb-2">
-                        <span class="text-sm font-medium" id="progressStatus">Processing...</span>
-                        <span class="text-sm text-gray-500" id="progressPercentage">0%</span>
-                    </div>
-                    <div class="w-full bg-gray-200 rounded-full h-2.5">
-                        <div class="bg-indigo-600 h-2.5 rounded-full transition-all duration-300" id="progressFill" style="width: 0%"></div>
+                <div>
+                    <h3 class="px-3 py-2 text-xs font-bold text-gray-400 uppercase tracking-wider">Documente & Resurse</h3>
+                    <div id="documentList" class="space-y-1">
+                        <!-- Listă documente -->
                     </div>
                 </div>
             </div>
-        </div>
+        </aside>
 
-        <!-- Step 3: Segment Editor -->
-        <div id="step3" class="hidden">
-            <div class="bg-white rounded-xl shadow-lg p-8">
-                <div class="flex items-center justify-between mb-6">
-                    <div class="flex items-center">
-                        <div class="w-10 h-10 rounded-full gradient-bg text-white flex items-center justify-center font-bold mr-4">3</div>
-                        <h2 class="text-2xl font-semibold">Review and Adjust Segments</h2>
-                    </div>
-                    <div class="flex space-x-2">
-                        <button class="bg-indigo-600 text-white px-3 py-2 rounded-lg hover:bg-indigo-700 transition-colors text-xs font-bold" onclick="previewProject()">
-                            <i class="fas fa-play-circle mr-1"></i> Preview Project
+        <!-- Main Content - Viewer Interactiv -->
+        <main class="flex-1 bg-gray-50 overflow-y-auto p-6 flex flex-col items-center">
+            <div id="emptyState" class="flex flex-col items-center justify-center h-full text-center max-w-md">
+                <div class="w-24 h-24 bg-indigo-100 text-indigo-500 rounded-full flex items-center justify-center mb-6">
+                    <i class="fas fa-play text-4xl"></i>
+                </div>
+                <h2 class="text-2xl font-bold text-gray-800 mb-2">Bine ai venit!</h2>
+                <p class="text-gray-500">Selectează un tutorial sau un document din biblioteca din stânga pentru a începe procesul de învățare.</p>
+            </div>
+
+            <!-- Video Player Viewer -->
+            <div id="videoViewer" class="hidden w-full max-w-5xl bg-black rounded-2xl shadow-2xl overflow-hidden aspect-video relative group">
+                <video id="mainVideo" class="w-full h-full" controls>
+                    <source src="" type="video/mp4">
+                    Browser-ul tău nu suportă redarea video.
+                </video>
+            </div>
+
+            <!-- Document Viewer -->
+            <div id="docViewer" class="hidden w-full max-w-5xl bg-white rounded-xl shadow-lg flex flex-col" style="height: 85vh;">
+                <div class="p-4 border-b flex justify-between items-center bg-gray-50 rounded-t-xl">
+                    <h2 id="docTitle" class="font-bold text-gray-700 truncate mr-4"></h2>
+                    <div class="flex items-center space-x-2">
+                        <button onclick="downloadCurrentDoc()" class="p-2 text-gray-500 hover:text-indigo-600 transition-colors" title="Descarcă">
+                            <i class="fas fa-download"></i>
                         </button>
-                        <button class="bg-indigo-500 text-white px-3 py-2 rounded-lg hover:bg-indigo-600 transition-colors text-xs font-bold" onclick="adjustAllSourceTimes(-0.5, 0)">
-                            <i class="fas fa-step-backward mr-1"></i> -0.5s In
-                        </button>
-                        <button class="bg-indigo-500 text-white px-3 py-2 rounded-lg hover:bg-indigo-600 transition-colors text-xs font-bold" onclick="adjustAllSourceTimes(0, 0.5)">
-                            <i class="fas fa-step-forward mr-1"></i> +0.5s Out
-                        </button>
-                        <button class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors text-sm" id="exportCsvBtn">
-                            <i class="fas fa-file-csv mr-2"></i>CSV
-                        </button>
-                        <button class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm" id="exportJsonBtn">
-                            <i class="fas fa-file-code mr-2"></i>JSON
+                        <button onclick="closeViewer()" class="p-2 text-gray-500 hover:text-red-600 transition-colors">
+                            <i class="fas fa-times"></i>
                         </button>
                     </div>
                 </div>
-
-                <div id="segmentList" class="space-y-6">
-                    <!-- Segment blocks will be added dynamically -->
-                </div>
-
-                <div class="mt-8 border-t pt-6">
-                    <button class="w-full bg-indigo-600 text-white py-4 rounded-xl font-bold text-lg shadow-lg hover:bg-indigo-700 transition-all transform hover:-translate-y-1" id="generateFinalBtn">
-                        <i class="fas fa-magic mr-2"></i>Generate Final Tracks
-                    </button>
+                <div id="docContent" class="flex-1 overflow-y-auto p-8 prose max-w-none">
+                    <!-- Conținut DOCX sau Iframe PDF -->
                 </div>
             </div>
-        </div>
 
-        <!-- Results Section -->
-        <div id="resultsSection" class="hidden mt-8">
-            <div class="bg-white rounded-xl shadow-lg p-8">
-                <h2 class="text-2xl font-semibold mb-6">Processing Results</h2>
-                
-                <div id="results" class="space-y-4">
-                    <!-- Results will be shown here -->
-                </div>
-
-                <div class="mt-6 flex space-x-4">
-                    <button class="flex-1 bg-green-600 text-white py-3 rounded-lg font-semibold hover:bg-green-700 transition-colors" id="downloadAllBtn">
-                        <i class="fas fa-download mr-2"></i>Download All Tracks
-                    </button>
-                    <button class="flex-1 bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition-colors" onclick="startNew()">
-                        <i class="fas fa-plus mr-2"></i>Start New Project
-                    </button>
+            <div id="assetInfo" class="hidden w-full max-w-5xl mt-6">
+                <h1 id="assetTitle" class="text-2xl font-bold text-gray-800"></h1>
+                <p id="assetMeta" class="text-sm text-gray-500 mt-1"></p>
+                <hr class="my-4">
+                <div id="assetDescription" class="text-gray-600 leading-relaxed">
+                    Acest material face parte din programul de instruire interactivă. Poți naviga prin capitole folosind bara de progres sau poți consulta documentația atașată.
                 </div>
             </div>
-        </div>
-    </main>
+        </main>
+    </div>
 
-    <!-- Toast Notification -->
-    <div id="toast" class="fixed bottom-4 right-4 bg-gray-900 text-white px-6 py-3 rounded-lg shadow-lg transform transition-transform duration-300 translate-y-full"></div>
+    <!-- Modal pentru Upload -->
+    <div id="uploadModal" class="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center hidden opacity-0 transition-opacity duration-300">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8 transform scale-95 transition-transform duration-300">
+            <div class="flex justify-between items-center mb-6">
+                <h2 class="text-2xl font-bold text-gray-800">Încarcă Material Nou</h2>
+                <button onclick="hideUploadModal()" class="text-gray-400 hover:text-gray-600">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
+            </div>
+
+            <div class="space-y-6">
+                <div class="border-2 border-dashed border-gray-300 rounded-xl p-6 text-center hover:border-indigo-500 transition-all group cursor-pointer" onclick="document.getElementById('fileInput').click()">
+                    <i class="fas fa-cloud-upload-alt text-4xl text-gray-300 group-hover:text-indigo-400 mb-3 transition-colors"></i>
+                    <p class="text-sm font-medium text-gray-600">Apasă pentru a alege fișierul</p>
+                    <p class="text-xs text-gray-400 mt-1">Video (MP4, WEBM) sau Documente (PDF, DOCX)</p>
+                    <input type="file" id="fileInput" class="hidden" onchange="handleFileSelect(this)">
+                </div>
+
+                <div id="selectedFileInfo" class="hidden bg-gray-50 rounded-lg p-3 flex items-center justify-between">
+                    <div class="flex items-center space-x-3 overflow-hidden">
+                        <i id="fileIcon" class="fas fa-file text-indigo-500"></i>
+                        <span id="selectedFileName" class="text-sm font-medium text-gray-700 truncate"></span>
+                    </div>
+                    <button onclick="clearFileSelection()" class="text-red-400 hover:text-red-600">
+                        <i class="fas fa-trash-alt"></i>
+                    </button>
+                </div>
+
+                <div id="uploadProgress" class="hidden">
+                    <div class="flex justify-between text-xs mb-1">
+                        <span id="uploadStatus">Se încarcă...</span>
+                        <span id="uploadPercent">0%</span>
+                    </div>
+                    <div class="w-full bg-gray-200 rounded-full h-1.5">
+                        <div id="uploadBar" class="bg-indigo-600 h-1.5 rounded-full transition-all duration-300" style="width: 0%"></div>
+                    </div>
+                </div>
+
+                <button id="startUploadBtn" onclick="startUpload()" disabled class="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold shadow-lg opacity-50 cursor-not-allowed hover:bg-indigo-700 transition-all">
+                    Începe Încărcarea
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast de Notificare -->
+    <div id="toast" class="fixed bottom-6 right-6 transform translate-y-24 opacity-0 transition-all duration-500 z-50">
+        <div class="bg-gray-900 text-white px-6 py-3 rounded-xl shadow-2xl flex items-center space-x-3">
+            <i id="toastIcon" class="fas fa-info-circle text-indigo-400"></i>
+            <span id="toastMessage"></span>
+        </div>
+    </div>
 
     <script>
-        // System info
-        async function loadSystemInfo() {
-            try {
-                const response = await fetch('/api/system-info');
-                const data = await response.json();
-                
-                let infoHtml = '';
-                if (data.gpu.available) {
-                    infoHtml = `
-                        <div class="flex items-center text-green-300">
-                            <i class="fas fa-microchip mr-2"></i>
-                            <span>GPU: ${data.gpu.name} (${data.gpu.memory})</span>
-                        </div>
-                    `;
-                } else {
-                    infoHtml = `
-                        <div class="flex items-center text-yellow-300">
-                            <i class="fas fa-exclamation-triangle mr-2"></i>
-                            <span>CPU Mode (GPU not detected)</span>
-                        </div>
-                    `;
-                }
-                
-                document.getElementById('systemInfo').innerHTML = infoHtml;
-            } catch (error) {
-                console.error('Failed to load system info:', error);
-            }
-        }
+        // Variabile globale
+        let selectedFile = null;
+        let currentAssets = { tutorials: [], documents: [] };
 
-        // Toast notification
-        function showToast(message, type = 'info') {
-            const toast = document.getElementById('toast');
-            toast.textContent = message;
-            toast.className = `fixed bottom-4 right-4 px-6 py-3 rounded-lg shadow-lg transform transition-transform duration-300 ${
-                type === 'success' ? 'bg-green-600' : 
-                type === 'error' ? 'bg-red-600' : 
-                'bg-gray-900'
-            } text-white`;
-            toast.style.transform = 'translateY(0)';
-            
-            setTimeout(() => {
-                toast.style.transform = 'translateY(100%)';
-            }, 3000);
-        }
-
-        let currentMetadata = null;
-        let currentJobId = null;
-        let jobAlignmentResults = null;
-        let activeAudio = null;
-        let speakerWaveforms = {}; // Cache for speaker waveform peaks
-
-        // Initialize
-        loadSystemInfo();
-
-        // Metadata form submission
-        document.getElementById('metadataForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const file = document.getElementById('metadataFile').files[0];
-            
-            if (!file) {
-                showToast('Please select a file', 'error');
-                return;
-            }
-
-            const formData = new FormData();
-            formData.append('metadata', file);
-
-            try {
-                document.getElementById('analyzeBtn').disabled = true;
-                document.getElementById('analyzeBtn').innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Analyzing...';
-
-                const response = await fetch('/api/upload-metadata', {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                const result = await response.json();
-                
-                if (result.success) {
-                    currentMetadata = result;
-                    showStep2(result);
-                    showToast('Metadata analyzed successfully', 'success');
-                } else {
-                    showToast('Error: ' + result.error, 'error');
-                }
-            } catch (error) {
-                showToast('Error: ' + error.message, 'error');
-            } finally {
-                document.getElementById('analyzeBtn').disabled = false;
-                document.getElementById('analyzeBtn').innerHTML = 'Analyze Metadata';
-            }
+        // Inițializare
+        document.addEventListener('DOMContentLoaded', () => {
+            fetchAssets();
+            fetchSystemStatus();
         });
 
-        function showStep2(data) {
-            document.getElementById('step1').classList.add('hidden');
-            document.getElementById('step2').classList.remove('hidden');
-
-            const metadataInfo = document.getElementById('metadataInfo');
-            metadataInfo.innerHTML = `
-                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <div>
-                        <div class="text-sm text-blue-600">File</div>
-                        <div class="font-medium">${data.filename}</div>
-                    </div>
-                    <div>
-                        <div class="text-sm text-blue-600">Speakers</div>
-                        <div class="font-medium">${data.stats.speaker_count}</div>
-                    </div>
-                    <div>
-                        <div class="text-sm text-blue-600">Segments</div>
-                        <div class="font-medium">${data.stats.total_segments}</div>
-                    </div>
-                    <div>
-                        <div class="text-sm text-blue-600">Duration</div>
-                        <div class="font-medium">${data.stats.total_duration.toFixed(2)}s</div>
-                    </div>
-                </div>
-            `;
-
-            const slotsDiv = document.getElementById('characterSlots');
-            slotsDiv.innerHTML = '';
-
-            data.speakers.forEach((speaker) => {
-                const count = data.stats.segments_per_speaker[speaker];
-                const slot = document.createElement('div');
-                slot.className = 'bg-gray-50 rounded-lg p-4 border border-gray-200';
-                slot.innerHTML = `
-                    <div class="flex items-center">
-                        <div class="flex items-center w-1/3">
-                            <input type="checkbox" class="speaker-select w-4 h-4 text-indigo-600 rounded" data-speaker="${speaker}" checked>
-                            <div class="ml-3">
-                                <div class="font-medium">${speaker}</div>
-                                <div class="text-xs text-gray-500">${count} segments</div>
-                            </div>
-                        </div>
-                        <div class="flex-1 ml-4">
-                            <input type="file" class="audio-input w-full text-sm" data-speaker="${speaker}" accept="audio/*">
-                        </div>
-                    </div>
-                `;
-                slotsDiv.appendChild(slot);
-            });
-        }
-
-        function toggleAllSpeakers(checked) {
-            document.querySelectorAll('.speaker-select').forEach(cb => cb.checked = checked);
-        }
-
-        function resetProcess() {
-            document.getElementById('step1').classList.remove('hidden');
-            document.getElementById('step2').classList.add('hidden');
-            document.getElementById('resultsSection').classList.add('hidden');
-            document.getElementById('metadataForm').reset();
-            currentMetadata = null;
-        }
-
-        // Process form submission
-        document.getElementById('processForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-
-            const aligner = document.querySelector('input[name="aligner"]:checked').value;
-            const selects = document.querySelectorAll('.speaker-select:checked');
-            
-            if (selects.length === 0) {
-                showToast('Select at least one speaker to process', 'error');
-                return;
-            }
-
-            const formData = new FormData();
-            formData.append('segments', JSON.stringify(currentMetadata.segments));
-            formData.append('use_whisperx', aligner === 'whisperx');
-            formData.append('use_whisper', aligner === 'whisper');
-            formData.append('whisper_model', document.getElementById('whisperModel').value);
-            formData.append('initial_prompt', document.getElementById('initialPrompt').value);
-
-            let hasAudio = false;
-            selects.forEach(select => {
-                const speaker = select.getAttribute('data-speaker');
-                const input = document.querySelector(`.audio-input[data-speaker="${speaker}"]`);
-                if (input.files[0]) {
-                    formData.append(`audio_${speaker}`, input.files[0]);
-                    hasAudio = true;
-                }
-                formData.append('speakers', speaker);
-            });
-
-            if (!hasAudio) {
-                showToast('Upload at least one audio file', 'error');
-                return;
-            }
-
-            // Show progress
-            document.getElementById('progressBar').classList.remove('hidden');
-            document.getElementById('processBtn').disabled = true;
-
+        // Fetch assets de la server
+        async function fetchAssets() {
             try {
-                const response = await fetch('/api/process', {
-                    method: 'POST',
-                    body: formData
-                });
+                const [tutRes, docRes] = await Promise.all([
+                    fetch('/api/tutorials'),
+                    fetch('/api/documents')
+                ]);
+                
+                const tutData = await tutRes.json();
+                const docData = await docRes.json();
 
-                const result = await response.json();
+                if (tutData.success) {
+                    currentAssets.tutorials = tutData.tutorials;
+                    renderTutorialList();
+                }
 
-                if (result.success) {
-                    currentJobId = result.job_id;
-                    pollJobStatus(result.job_id);
-                    showToast('Processing started', 'success');
-                } else {
-                    showToast('Error: ' + result.error, 'error');
-                    document.getElementById('progressBar').classList.add('hidden');
-                    document.getElementById('processBtn').disabled = false;
+                if (docData.success) {
+                    currentAssets.documents = docData.documents;
+                    renderDocumentList();
                 }
             } catch (error) {
-                showToast('Error: ' + error.message, 'error');
-                document.getElementById('progressBar').classList.add('hidden');
-                document.getElementById('processBtn').disabled = false;
+                showToast('Eroare la încărcarea bibliotecii', 'error');
             }
-        });
+        }
 
-        async function pollJobStatus(jobId) {
-            const poll = async () => {
+        function renderTutorialList() {
+            const list = document.getElementById('tutorialList');
+            list.innerHTML = currentAssets.tutorials.map(tut => `
+                <button onclick="playTutorial('${tut.filename}', '${tut.url}')" class="w-full text-left px-3 py-2 rounded-lg hover:bg-indigo-50 group flex items-center space-x-3 transition-colors">
+                    <div class="w-8 h-8 bg-indigo-100 text-indigo-600 rounded flex items-center justify-center flex-shrink-0 group-hover:bg-indigo-600 group-hover:text-white transition-colors">
+                        <i class="fas fa-play text-xs"></i>
+                    </div>
+                    <span class="text-sm font-medium text-gray-700 truncate">${tut.filename}</span>
+                </button>
+            `).join('');
+        }
+
+        function renderDocumentList() {
+            const list = document.getElementById('documentList');
+            list.innerHTML = currentAssets.documents.map(doc => `
+                <button onclick="viewDocument('${doc.filename}', '${doc.url}', '${doc.type}')" class="w-full text-left px-3 py-2 rounded-lg hover:bg-emerald-50 group flex items-center space-x-3 transition-colors">
+                    <div class="w-8 h-8 bg-emerald-100 text-emerald-600 rounded flex items-center justify-center flex-shrink-0 group-hover:bg-emerald-600 group-hover:text-white transition-colors">
+                        <i class="fas ${doc.type === 'pdf' ? 'fa-file-pdf' : 'fa-file-word'} text-xs"></i>
+                    </div>
+                    <span class="text-sm font-medium text-gray-700 truncate">${doc.filename}</span>
+                </button>
+            `).join('');
+        }
+
+        // Viewers Logic
+        function playTutorial(filename, url) {
+            hideAllViewers();
+            const video = document.getElementById('mainVideo');
+            video.src = url;
+            document.getElementById('videoViewer').classList.remove('hidden');
+            showAssetInfo(filename, 'Video Tutorial');
+            video.play();
+        }
+
+        async function viewDocument(filename, url, type) {
+            hideAllViewers();
+            const content = document.getElementById('docContent');
+            const title = document.getElementById('docTitle');
+            title.textContent = filename;
+            document.getElementById('docViewer').classList.remove('hidden');
+            showAssetInfo(filename, type.toUpperCase() + ' Document');
+
+            if (type === 'pdf') {
+                content.innerHTML = `<iframe src="${url}" class="w-full h-full rounded-lg border-0"></iframe>`;
+            } else if (type === 'docx') {
+                content.innerHTML = '<div class="flex items-center justify-center h-full"><i class="fas fa-spinner fa-spin text-3xl text-indigo-500"></i></div>';
                 try {
-                    const response = await fetch(`/api/job/${jobId}`);
-                    const data = await response.json();
-
-                    if (data.status.includes('✅')) {
-                        document.getElementById('progressBar').classList.add('hidden');
-                        document.getElementById('processBtn').disabled = false;
-                        jobAlignmentResults = data.results;
-                        showStep3(data.results);
-                        showToast('Processing completed!', 'success');
-                    } else if (data.status.includes('❌')) {
-                        showToast('Job failed: ' + data.error, 'error');
-                        document.getElementById('progressBar').classList.add('hidden');
-                        document.getElementById('processBtn').disabled = false;
-                    } else {
-                        document.getElementById('progressFill').style.width = data.progress + '%';
-                        document.getElementById('progressPercentage').innerText = data.progress + '%';
-                        document.getElementById('progressStatus').innerText = data.status;
-                        setTimeout(poll, 1000);
-                    }
+                    const response = await fetch(url);
+                    const arrayBuffer = await response.arrayBuffer();
+                    const result = await mammoth.convertToHtml({ arrayBuffer: arrayBuffer });
+                    content.innerHTML = `<div class="bg-white p-4">${result.value}</div>`;
                 } catch (error) {
-                    console.error('Polling error:', error);
-                    setTimeout(poll, 2000);
+                    content.innerHTML = `<div class="text-red-500 p-4">Eroare la redarea documentului DOCX.</div>`;
                 }
-            };
-            poll();
-        }
-
-        async function showStep3(results) {
-            document.getElementById('step2').classList.add('hidden');
-            document.getElementById('step3').classList.remove('hidden');
-            
-            const list = document.getElementById('segmentList');
-            list.innerHTML = '';
-
-            // Prefetch waveforms for all unique speakers in parallel
-            const speakers = [...new Set(results.map(s => s.speaker))];
-            await Promise.all(speakers.map(async (speaker) => {
-                if (!speakerWaveforms[speaker]) {
-                    try {
-                        const resp = await fetch(`/api/waveform-data/${currentJobId}/${speaker}`);
-                        speakerWaveforms[speaker] = await resp.json();
-                    } catch (e) {
-                        console.error(`Failed to load waveform for ${speaker}:`, e);
-                    }
-                }
-            }));
-
-            results.forEach((seg, index) => {
-                const confidenceClass = seg.confidence > 0.7 ? 'border-green-500' :
-                                       seg.confidence > 0.4 ? 'border-yellow-500' :
-                                       'border-red-500';
-                
-                const block = document.createElement('div');
-                block.className = `bg-white rounded-xl shadow border-l-4 ${confidenceClass} overflow-hidden`;
-                block.id = `seg-${index}`;
-                block.innerHTML = `
-                    <div class="p-4 bg-gray-50 flex items-center justify-between border-b">
-                        <div class="flex items-center space-x-4">
-                            <button onclick="previewSegment(this, '${seg.speaker}', ${index})" class="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 hover:bg-indigo-600 hover:text-white transition-colors">
-                                <i class="fas fa-play"></i>
-                            </button>
-                            <span class="font-bold text-indigo-900">${seg.speaker}</span>
-                            <span class="text-sm text-gray-600 italic truncate max-w-md" title="${seg.text_ro}">${seg.text_ro}</span>
-                        </div>
-                        <div class="flex items-center space-x-6 text-sm">
-                            <div class="flex space-x-2">
-                                <label class="text-gray-500">CSV:</label>
-                                <input type="number" step="0.01" class="w-16 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center csv-start" value="${seg.csv_start}">
-                                <span>-</span>
-                                <input type="number" step="0.01" class="w-16 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center csv-end" value="${seg.csv_end}">
-                            </div>
-                            <div class="flex space-x-2">
-                                <label class="text-gray-500">Source:</label>
-                                <input type="number" step="0.01" class="w-16 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center source-start" value="${seg.source_start}">
-                                <span>-</span>
-                                <input type="number" step="0.01" class="w-16 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center source-end" value="${seg.source_end}">
-                            </div>
-                            <div class="flex space-x-2 items-center">
-                                <label class="text-gray-500">Tempo:</label>
-                                <input type="number" step="0.01" min="0.5" max="2.0" class="w-14 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center tempo" value="${seg.tempo || '1.00'}">
-                                <span class="text-xs text-gray-400 mr-2">x</span>
-                                <button onclick="realignFromHere('${seg.speaker}', ${index}, this)" class="text-indigo-600 hover:text-indigo-800 transition-colors" title="Re-align all following segments from this point">
-                                    <i class="fas fa-sync-alt"></i>
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="p-2 relative bg-gray-50/50">
-                        <div id="waveform-${index}" class="w-full h-10"></div>
-                        <div class="absolute bottom-1 right-2 flex space-x-4 text-[11px] font-bold uppercase tracking-wider">
-                           <span class="text-gray-400">Confidence: ${Math.round(seg.confidence * 100)}%</span>
-                           <span class="delta-label"></span>
-                        </div>
-                    </div>
-                `;
-                list.appendChild(block);
-                initWaveform(index, seg.speaker, seg.source_start, seg.source_end);
-            });
-
-            // Export functionality
-            document.getElementById('exportCsvBtn').onclick = () => exportResults('csv');
-            document.getElementById('exportJsonBtn').onclick = () => exportResults('json');
-        }
-
-        let waveforms = {};
-
-        function initWaveform(index, speaker, start, end) {
-            const container = document.getElementById(`waveform-${index}`);
-            const speakerData = speakerWaveforms[speaker];
-
-            if (!speakerData || !speakerData.peaks) return;
-
-            const ws = WaveSurfer.create({
-                container: container,
-                waveColor: '#cbd5e1',
-                progressColor: '#6366f1',
-                height: 40,
-                interact: false,
-                peaks: [speakerData.peaks],
-                duration: speakerData.duration,
-            });
-
-            // Initialize Regions plugin
-            const wsRegions = ws.registerPlugin(WaveSurfer.Regions.create());
-            ws.regions = wsRegions; // Store on ws for backward compatibility
-
-            waveforms[index] = ws;
-
-            ws.on('ready', () => {
-                const s = parseFloat(block.querySelector('.source-start').value);
-                ws.setTime(s);
-                updateView();
-            });
-
-            const block = document.getElementById(`seg-${index}`);
-            const inputs = block.querySelectorAll('input');
-
-            // Handle Region updates (dragging)
-            let isUpdatingFromRegion = false;
-            wsRegions.on('region-updated', (region) => {
-                isUpdatingFromRegion = true;
-                const startInput = block.querySelector('.source-start');
-                const endInput = block.querySelector('.source-end');
-
-                // Update inputs
-                startInput.value = region.start.toFixed(2);
-                endInput.value = region.end.toFixed(2);
-
-                // Trigger input event to update delta label
-                startInput.dispatchEvent(new Event('input', { bubbles: true }));
-                isUpdatingFromRegion = false;
-            });
-
-            const updateView = (fromInput = false) => {
-                const s = parseFloat(block.querySelector('.source-start').value);
-                const e = parseFloat(block.querySelector('.source-end').value);
-                const csvS = parseFloat(block.querySelector('.csv-start').value);
-                const csvE = parseFloat(block.querySelector('.csv-end').value);
-                const tempo = parseFloat(block.querySelector('.tempo').value) || 1.0;
-
-                // Only update region if called from input AND not currently updating from region drag
-                if (!isUpdatingFromRegion && (fromInput || wsRegions.getRegions().length === 0)) {
-                    wsRegions.clearRegions();
-                    wsRegions.addRegion({
-                        id: `region-${index}`,
-                        start: s,
-                        end: e,
-                        color: 'rgba(239, 68, 68, 0.1)',
-                        drag: true,
-                        resize: true
-                    });
-                }
-
-                // Update Waveform zoom/view with padding
-                if (!isNaN(s) && !isNaN(e) && e > s && !fromInput) {
-                    const padding = (e - s) * 0.2; // 20% padding
-                    const viewStart = Math.max(0, s - padding);
-                    const viewEnd = Math.min(speakerData.duration, e + padding);
-                    const viewDuration = viewEnd - viewStart;
-
-                    // Force a minimum width to ensure zoom calculation is stable
-                    const containerWidth = container.clientWidth || 800;
-                    const minPxPerSec = containerWidth / viewDuration;
-
-                    ws.zoom(minPxPerSec);
-
-                    // Use setTimeout to ensure zoom is applied before scrolling
-                    setTimeout(() => {
-                        // WaveSurfer 7: the container itself might have overflow-x: auto
-                        // or it might be an internal div. ws.getWrapper() is the canvas container.
-                        const wrapper = ws.getWrapper();
-                        if (wrapper) {
-                            // Find the first scrollable parent
-                            let scrollable = wrapper;
-                            while (scrollable && scrollable !== container) {
-                                if (window.getComputedStyle(scrollable).overflowX === 'auto' ||
-                                    window.getComputedStyle(scrollable).overflowX === 'scroll' ||
-                                    scrollable.scrollWidth > scrollable.clientWidth) {
-                                    break;
-                                }
-                                scrollable = scrollable.parentElement;
-                            }
-
-                            if (scrollable) {
-                                const scrollPos = viewStart * (wrapper.scrollWidth / speakerData.duration);
-                                scrollable.scrollLeft = scrollPos;
-                            }
-                        }
-                    }, 50);
-                }
-
-                // Update Delta Label
-                const deltaLabel = block.querySelector('.delta-label');
-                const targetDuration = csvE - csvS;
-                const sourceDuration = (e - s) / tempo;
-                const diff = sourceDuration - targetDuration;
-
-                if (Math.abs(diff) < 0.01) {
-                    deltaLabel.textContent = 'Perfect Match';
-                    deltaLabel.className = 'delta-label text-green-500';
-                } else if (diff > 0) {
-                    deltaLabel.textContent = `+${diff.toFixed(2)}s Added`;
-                    deltaLabel.className = 'delta-label text-blue-500';
-                } else {
-                    deltaLabel.textContent = `${diff.toFixed(2)}s Removed`;
-                    deltaLabel.className = 'delta-label text-orange-500';
-                }
-            };
-
-            inputs.forEach(input => input.addEventListener('input', (e) => {
-                // updateView is called with fromInput=true to update region but NOT zoom/scroll
-                updateView(true);
-            }));
-
-            // Initial view update
-            setTimeout(updateView, 100);
-        }
-
-        function previewSegment(btn, speaker, index) {
-            if (activeAudio) {
-                activeAudio.pause();
-                const oldBtn = activeAudio.btn;
-                if (oldBtn) oldBtn.innerHTML = '<i class="fas fa-play"></i>';
-
-                if (activeAudio === btn.audio) {
-                    activeAudio = null;
-                    return;
-                }
-            }
-
-            const block = document.getElementById(`seg-${index}`);
-            const start = parseFloat(block.querySelector('.source-start').value);
-            const end = parseFloat(block.querySelector('.source-end').value);
-            const tempo = parseFloat(block.querySelector('.tempo').value) || 1.0;
-
-            if (isNaN(start) || isNaN(end) || start >= end) {
-                showToast('Invalid start/end times', 'error');
-                return;
-            }
-
-            const url = `/api/original-audio/${currentJobId}/${speaker}`;
-            const audio = new Audio(url);
-            audio.playbackRate = tempo;
-            activeAudio = audio;
-            audio.btn = btn;
-            btn.audio = audio;
-            btn.innerHTML = '<i class="fas fa-stop"></i>';
-
-            audio.addEventListener('loadedmetadata', () => {
-                audio.currentTime = start;
-                audio.play();
-
-                // Sync waveform progress
-                const ws = waveforms[index];
-                const duration = (end - start) / tempo;
-
-                audio.ontimeupdate = () => {
-                    if (activeAudio === audio && !audio.paused) {
-                        ws.setTime(audio.currentTime);
-                    }
-                };
-
-                setTimeout(() => {
-                    if (activeAudio === audio) {
-                        audio.pause();
-                        btn.innerHTML = '<i class="fas fa-play"></i>';
-                        activeAudio = null;
-                        ws.setTime(start);
-                    }
-                }, duration * 1000);
-            });
-
-            audio.addEventListener('ended', () => {
-                btn.innerHTML = '<i class="fas fa-play"></i>';
-                activeAudio = null;
-            });
-        }
-
-        function exportResults(format) {
-            const blocks = document.querySelectorAll('#segmentList > div');
-            const data = [];
-
-            blocks.forEach((block, index) => {
-                const orig = jobAlignmentResults[index];
-                data.push({
-                    speaker: orig.speaker,
-                    text_ro: orig.text_ro,
-                    text_en: orig.text_en,
-                    csv_start: parseFloat(block.querySelector('.csv-start').value),
-                    csv_end: parseFloat(block.querySelector('.csv-end').value),
-                    source_start: parseFloat(block.querySelector('.source-start').value),
-                    source_end: parseFloat(block.querySelector('.source-end').value),
-                    tempo: parseFloat(block.querySelector('.tempo').value) || 1.0,
-                    confidence: orig.confidence
-                });
-            });
-
-            let content, filename, mime;
-            if (format === 'csv') {
-                const headers = ['speaker', 'text_ro', 'text_en', 'csv_start', 'csv_end', 'source_start', 'source_end', 'tempo', 'confidence'];
-                const csv = [headers.join(',')];
-                data.forEach(row => {
-                    csv.push(headers.map(h => row[h]).join(','));
-                });
-                content = csv.join('\n');
-                filename = 'alignment_results.csv';
-                mime = 'text/csv';
-            } else {
-                content = JSON.stringify(data, null, 2);
-                filename = 'alignment_results.json';
-                mime = 'application/json';
-            }
-
-            const blob = new Blob([content], { type: mime });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            a.click();
-            URL.revokeObjectURL(url);
-        }
-
-        // Generate final tracks
-        document.getElementById('generateFinalBtn').addEventListener('click', async () => {
-            const generateBtn = document.getElementById('generateFinalBtn');
-            generateBtn.disabled = true;
-            generateBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Generating...';
-
-            // Collect adjusted data
-            const blocks = document.querySelectorAll('#segmentList > div');
-            const adjustedAlignments = [];
-
-            blocks.forEach((block, index) => {
-                const orig = jobAlignmentResults[index];
-                adjustedAlignments.push({
-                    ...orig,
-                    csv_start: parseFloat(block.querySelector('.csv-start').value),
-                    csv_end: parseFloat(block.querySelector('.csv-end').value),
-                    source_start: parseFloat(block.querySelector('.source-start').value),
-                    source_end: parseFloat(block.querySelector('.source-end').value),
-                    tempo: parseFloat(block.querySelector('.tempo').value) || 1.0
-                });
-            });
-
-            try {
-                const response = await fetch('/api/generate-final', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        job_id: currentJobId, 
-                        alignments: adjustedAlignments,
-                        download_all: true
-                    })
-                });
-                
-                const result = await response.json();
-                
-                if (result.success) {
-                    displayResults(result);
-                    showToast('Tracks generated successfully', 'success');
-                } else {
-                    showToast('Error: ' + result.error, 'error');
-                }
-            } catch (error) {
-                showToast('Error: ' + error.message, 'error');
-            } finally {
-                generateBtn.disabled = false;
-                generateBtn.innerHTML = 'Generate Final Tracks';
-            }
-        });
-
-        function displayResults(data) {
-            const resultsDiv = document.getElementById('results');
-            document.getElementById('step3').classList.add('hidden');
-            document.getElementById('resultsSection').classList.remove('hidden');
-
-            let html = '<div class="space-y-3">';
-
-            data.output_files.forEach(track => {
-                html += `
-                    <div class="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                        <div>
-                            <div class="font-medium">${track.speaker}</div>
-                            <div class="text-sm text-gray-500">${track.duration.toFixed(2)}s • ${(track.size / 1024).toFixed(1)} KB</div>
-                        </div>
-                        <div class="flex space-x-2">
-                            <audio controls src="/api/preview/${track.file}" class="h-10"></audio>
-                            <a href="/api/download/${track.file}" class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700">
-                                <i class="fas fa-download"></i>
-                            </a>
-                        </div>
-                    </div>
-                `;
-            });
-
-            if (data.zip_file) {
-                html += `
-                    <div class="mt-4 p-4 bg-green-50 rounded-lg">
-                        <div class="flex items-center justify-between">
-                            <span class="font-medium">All Tracks (ZIP)</span>
-                            <a href="/api/download/${data.zip_file}" class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700">
-                                <i class="fas fa-file-archive mr-2"></i>Download All
-                            </a>
-                        </div>
-                    </div>
-                `;
-            }
-
-            html += '</div>';
-            resultsDiv.innerHTML = html;
-        }
-
-        function adjustAllSourceTimes(startDelta, endDelta) {
-            const blocks = Array.from(document.querySelectorAll('#segmentList > div'));
-
-            // For each speaker, we need to enforce no-overlap
-            const speakerBlocks = {};
-            blocks.forEach(block => {
-                const speaker = block.querySelector('.text-indigo-900').textContent;
-                if (!speakerBlocks[speaker]) speakerBlocks[speaker] = [];
-                speakerBlocks[speaker].push(block);
-            });
-
-            for (const speaker in speakerBlocks) {
-                const sBlocks = speakerBlocks[speaker];
-                sBlocks.forEach((block, idx) => {
-                    const startInput = block.querySelector('.source-start');
-                    const endInput = block.querySelector('.source-end');
-
-                    if (!startInput || !endInput) return;
-
-                    // 1. Apply Adjustment
-                    if (startDelta !== 0) {
-                        const val = parseFloat(startInput.value);
-                        if (!isNaN(val)) {
-                            startInput.value = Math.max(0, val + startDelta).toFixed(2);
-                        }
-                    }
-
-                    if (endDelta !== 0) {
-                        const val = parseFloat(endInput.value);
-                        if (!isNaN(val)) {
-                            endInput.value = Math.max(parseFloat(startInput.value) + 0.1, val + endDelta).toFixed(2);
-                        }
-                    }
-
-                    // 2. Enforce No-Overlap with PREVIOUS
-                    if (idx > 0) {
-                        const prevEndInput = sBlocks[idx-1].querySelector('.source-end');
-                        const curStartVal = parseFloat(startInput.value);
-                        const prevEndVal = parseFloat(prevEndInput.value);
-
-                        if (curStartVal < prevEndVal) {
-                            // Trim current start to prev end
-                            startInput.value = prevEndVal.toFixed(2);
-
-                            // Adjust end if needed
-                            if (parseFloat(endInput.value) <= parseFloat(startInput.value)) {
-                                endInput.value = (parseFloat(startInput.value) + 0.1).toFixed(2);
-                            }
-                        }
-                    }
-
-                    // Dispatch events to refresh waveforms
-                    startInput.dispatchEvent(new Event('input'));
-                    endInput.dispatchEvent(new Event('input'));
-                });
-            }
-            showToast(`Adjusted all segments: ${startDelta !== 0 ? 'In ' + (startDelta > 0 ? '+' : '') + startDelta + 's' : ''} ${endDelta !== 0 ? 'Out ' + (endDelta > 0 ? '+' : '') + endDelta + 's' : ''}`, 'success');
-        }
-
-        async function previewProject() {
-            const blocks = Array.from(document.querySelectorAll('#segmentList > div'));
-            const segments = blocks.map((block, index) => ({
-                index,
-                speaker: block.querySelector('.text-indigo-900').textContent,
-                csv_start: parseFloat(block.querySelector('.csv-start').value),
-                source_start: parseFloat(block.querySelector('.source-start').value),
-                source_end: parseFloat(block.querySelector('.source-end').value),
-                tempo: parseFloat(block.querySelector('.tempo').value) || 1.0,
-                btn: block.querySelector('button')
-            }));
-
-            // Sort by target timecode (chronological order of final output)
-            segments.sort((a, b) => a.csv_start - b.csv_start);
-
-            if (segments.length === 0) return;
-
-            showToast('Starting Project Preview (Sequential by CSV timecodes)', 'info');
-
-            for (const seg of segments) {
-                // Flash the segment block
-                const el = document.getElementById(`seg-${seg.index}`);
-                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                el.classList.add('bg-indigo-50');
-
-                // Play and wait
-                await new Promise(resolve => {
-                    const duration = (seg.source_end - seg.source_start) / seg.tempo;
-                    previewSegment(seg.btn, seg.speaker, seg.index);
-
-                    setTimeout(() => {
-                        el.classList.remove('bg-indigo-50');
-                        resolve();
-                    }, (duration * 1000) + 200); // 200ms gap
-                });
-
-                if (activeAudio === null) break; // Interrupted
             }
         }
 
-        async function realignFromHere(speaker, index, btn) {
-            // Find start index within speaker's segments
-            const speakerResults = jobAlignmentResults.filter(r => r.speaker === speaker);
-            // We need to find the relative index for this speaker
-            let speakerIdx = -1;
-            let currentRelativeIdx = 0;
-            jobAlignmentResults.forEach((r, i) => {
-                if (r.speaker === speaker) {
-                    if (i === index) {
-                        speakerIdx = currentRelativeIdx;
-                    }
-                    currentRelativeIdx++;
-                }
-            });
+        function hideAllViewers() {
+            document.getElementById('emptyState').classList.add('hidden');
+            document.getElementById('videoViewer').classList.add('hidden');
+            document.getElementById('docViewer').classList.add('hidden');
+            document.getElementById('assetInfo').classList.add('hidden');
+            document.getElementById('mainVideo').pause();
+        }
 
-            if (speakerIdx === -1) return;
+        function showAssetInfo(title, meta) {
+            document.getElementById('assetInfo').classList.remove('hidden');
+            document.getElementById('assetTitle').textContent = title;
+            document.getElementById('assetMeta').textContent = meta;
+        }
 
-            // Offset is the source_end of the segment PRECEDING the current one
-            // If it's the first segment for this speaker, offset is 0
-            let offsetTime = 0;
-            if (speakerIdx > 0) {
-                // We need to find the actual block for the preceding speaker segment
-                const precedingSpeakerSeg = speakerResults[speakerIdx - 1];
-                // Find global index of precedingSpeakerSeg
-                const globalIdx = jobAlignmentResults.findIndex(r => r === precedingSpeakerSeg);
-                const prevBlock = document.getElementById(`seg-${globalIdx}`);
-                if (prevBlock) {
-                    offsetTime = parseFloat(prevBlock.querySelector('.source-end').value);
-                }
+        function closeViewer() {
+            hideAllViewers();
+            document.getElementById('emptyState').classList.remove('hidden');
+        }
+
+        // Modal Logic
+        function showUploadModal() {
+            const modal = document.getElementById('uploadModal');
+            modal.classList.remove('hidden');
+            setTimeout(() => {
+                modal.classList.remove('opacity-0');
+                modal.children[0].classList.remove('scale-95');
+            }, 10);
+        }
+
+        function hideUploadModal() {
+            const modal = document.getElementById('uploadModal');
+            modal.classList.add('opacity-0');
+            modal.children[0].classList.add('scale-95');
+            setTimeout(() => {
+                modal.classList.add('hidden');
+                clearFileSelection();
+            }, 300);
+        }
+
+        function handleFileSelect(input) {
+            if (input.files && input.files[0]) {
+                selectedFile = input.files[0];
+                const info = document.getElementById('selectedFileInfo');
+                const nameSpan = document.getElementById('selectedFileName');
+                const icon = document.getElementById('fileIcon');
+                const btn = document.getElementById('startUploadBtn');
+
+                nameSpan.textContent = selectedFile.name;
+                info.classList.remove('hidden');
+
+                // Set icon
+                const ext = selectedFile.name.split('.').pop().toLowerCase();
+                if (['mp4', 'webm', 'mov'].includes(ext)) icon.className = 'fas fa-video text-indigo-500';
+                else if (ext === 'pdf') icon.className = 'fas fa-file-pdf text-red-500';
+                else if (ext === 'docx') icon.className = 'fas fa-file-word text-blue-500';
+                else icon.className = 'fas fa-file text-gray-500';
+
+                btn.disabled = false;
+                btn.classList.remove('opacity-50', 'cursor-not-allowed');
             }
+        }
 
-            // Collect all current adjustments to preserve them
-            const currentAlignments = Array.from(document.querySelectorAll('#segmentList > div')).map(el => ({
-                source_start: parseFloat(el.querySelector('.source-start').value),
-                source_end: parseFloat(el.querySelector('.source-end').value),
-                tempo: parseFloat(el.querySelector('.tempo').value) || 1.0
-            }));
-
-            showToast('Re-aligning following segments...', 'info');
-            const originalHtml = btn.innerHTML;
-            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+        function clearFileSelection() {
+            selectedFile = null;
+            document.getElementById('fileInput').value = '';
+            document.getElementById('selectedFileInfo').classList.add('hidden');
+            const btn = document.getElementById('startUploadBtn');
             btn.disabled = true;
+            btn.classList.add('opacity-50', 'cursor-not-allowed');
+            document.getElementById('uploadProgress').classList.add('hidden');
+        }
+
+        async function startUpload() {
+            if (!selectedFile) return;
+
+            const ext = selectedFile.name.split('.').pop().toLowerCase();
+            const isVideo = ['mp4', 'webm', 'mov', 'ogg'].includes(ext);
+            const endpoint = isVideo ? '/api/upload-tutorial' : '/api/upload-document';
+            const fileKey = isVideo ? 'video' : 'document';
+
+            const formData = new FormData();
+            formData.append(fileKey, selectedFile);
+
+            const progressDiv = document.getElementById('uploadProgress');
+            const bar = document.getElementById('uploadBar');
+            const percent = document.getElementById('uploadPercent');
+            const btn = document.getElementById('startUploadBtn');
+
+            progressDiv.classList.remove('hidden');
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Se încarcă...';
 
             try {
-                const response = await fetch('/api/realign', {
+                // Notă: Fetch API nu suportă nativ upload progress, dar pentru acest demo folosim un flow simplu
+                // Într-o aplicație reală am folosi XMLHttpRequest
+                const response = await fetch(endpoint, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        job_id: currentJobId,
-                        speaker: speaker,
-                        start_index: speakerIdx, // Start FROM the selected segment
-                        offset_time: offsetTime, // Note: backend uses this as starting point for text batch
-                        current_alignments: currentAlignments
-                    })
+                    body: formData
                 });
 
                 const result = await response.json();
+
                 if (result.success) {
-                    jobAlignmentResults = result.results;
-                    // Refresh Step 3 view
-                    showStep3(result.results);
-                    showToast('Re-alignment completed!', 'success');
+                    showToast('Fișier încărcat cu succes!', 'success');
+                    fetchAssets();
+                    hideUploadModal();
                 } else {
-                    showToast('Re-alignment failed: ' + result.error, 'error');
+                    showToast('Eroare: ' + result.error, 'error');
                 }
             } catch (error) {
-                showToast('Error during re-alignment: ' + error.message, 'error');
+                showToast('Eroare de rețea la încărcare', 'error');
             } finally {
-                btn.innerHTML = originalHtml;
+                btn.innerHTML = 'Începe Încărcarea';
                 btn.disabled = false;
             }
         }
 
-        function startNew() {
-            window.location.reload();
+        // Utils
+        function showToast(message, type = 'info') {
+            const toast = document.getElementById('toast');
+            const msgSpan = document.getElementById('toastMessage');
+            const icon = document.getElementById('toastIcon');
+
+            msgSpan.textContent = message;
+            if (type === 'success') {
+                icon.className = 'fas fa-check-circle text-emerald-400';
+            } else if (type === 'error') {
+                icon.className = 'fas fa-exclamation-circle text-red-400';
+            } else {
+                icon.className = 'fas fa-info-circle text-indigo-400';
+            }
+
+            toast.classList.remove('translate-y-24', 'opacity-0');
+            setTimeout(() => {
+                toast.classList.add('translate-y-24', 'opacity-0');
+            }, 3000);
         }
+
+        async function fetchSystemStatus() {
+            try {
+                const response = await fetch('/api/system-info');
+                const data = await response.json();
+                const statusDiv = document.getElementById('systemStatus');
+                if (data.gpu.available) {
+                    statusDiv.innerHTML = `<span class="flex items-center text-emerald-300"><span class="w-2 h-2 bg-emerald-400 rounded-full mr-2 animate-pulse"></span> Accelerare GPU Activă: ${data.gpu.name}</span>`;
+                } else {
+                    statusDiv.innerHTML = '<span class="flex items-center text-gray-300">Mod Standard (CPU)</span>';
+                }
+            } catch (e) {}
+        }
+
+        function downloadCurrentDoc() {
+            const title = document.getElementById('docTitle').textContent;
+            const asset = currentAssets.documents.find(d => d.filename === title);
+            if (asset) {
+                const a = document.createElement('a');
+                a.href = asset.url;
+                a.download = asset.filename;
+                a.click();
+            }
+        }
+
+        // Căutare
+        document.getElementById('assetSearch').addEventListener('input', (e) => {
+            const term = e.target.value.toLowerCase();
+            const filter = (arr) => arr.filter(item => item.filename.toLowerCase().includes(term));
+
+            // Re-randare cu filtru
+            const tutList = document.getElementById('tutorialList');
+            const docList = document.getElementById('documentList');
+
+            const filteredTuts = filter(currentAssets.tutorials);
+            const filteredDocs = filter(currentAssets.documents);
+
+            tutList.innerHTML = filteredTuts.length > 0 ? filteredTuts.map(tut => `
+                <button onclick="playTutorial('${tut.filename}', '${tut.url}')" class="w-full text-left px-3 py-2 rounded-lg hover:bg-indigo-50 group flex items-center space-x-3 transition-colors">
+                    <div class="w-8 h-8 bg-indigo-100 text-indigo-600 rounded flex items-center justify-center flex-shrink-0 group-hover:bg-indigo-600 group-hover:text-white transition-colors">
+                        <i class="fas fa-play text-xs"></i>
+                    </div>
+                    <span class="text-sm font-medium text-gray-700 truncate">${tut.filename}</span>
+                </button>
+            `).join('') : '<p class="text-xs text-gray-400 px-3 py-2 italic">Niciun rezultat</p>';
+
+            docList.innerHTML = filteredDocs.length > 0 ? filteredDocs.map(doc => `
+                <button onclick="viewDocument('${doc.filename}', '${doc.url}', '${doc.type}')" class="w-full text-left px-3 py-2 rounded-lg hover:bg-emerald-50 group flex items-center space-x-3 transition-colors">
+                    <div class="w-8 h-8 bg-emerald-100 text-emerald-600 rounded flex items-center justify-center flex-shrink-0 group-hover:bg-emerald-600 group-hover:text-white transition-colors">
+                        <i class="fas ${doc.type === 'pdf' ? 'fa-file-pdf' : 'fa-file-word'} text-xs"></i>
+                    </div>
+                    <span class="text-sm font-medium text-gray-700 truncate">${doc.filename}</span>
+                </button>
+            `).join('') : '<p class="text-xs text-gray-400 px-3 py-2 italic">Niciun rezultat</p>';
+        });
     </script>
 </body>
 </html>
