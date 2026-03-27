@@ -38,17 +38,22 @@ class DialogueAligner:
                 audio = torch.from_numpy(audio).to(self.device)
 
             # Transcribe with word timestamps
+            # Use specific decoding parameters to improve sensitivity, especially for Romanian
             result = self.model.transcribe(
                 audio, 
                 language=language, 
                 word_timestamps=use_word_timestamps,
                 initial_prompt=initial_prompt,
-                beam_size=5 if self.device == "cuda" else 1  # Better quality on GPU
+                beam_size=5 if self.device == "cuda" else 1,  # Better quality on GPU
+                no_speech_threshold=0.3,
+                logprob_threshold=-1.0,
+                condition_on_previous_text=False
             )
             
             transcribed_segments = result.get('segments', [])
 
-            # 2. Match transcriptions to expected segments
+            # 2. Match transcriptions to expected segments (Global Pass)
+            # This allows finding the best match anywhere to expose outliers
             aligned_results = []
 
             for expected in expected_segments:
@@ -62,25 +67,16 @@ class DialogueAligner:
 
                 for transcribed in transcribed_segments:
                     trans_text = transcribed['text'].strip()
-                    
+
                     # Calculate similarity
                     ratio = difflib.SequenceMatcher(
-                        None, 
-                        expected_text.lower(), 
-                        trans_text.lower()
+                        None,
+                        self._normalize_text(expected_text),
+                        self._normalize_text(trans_text)
                     ).ratio()
-                    
-                    # Also check with normalized text
-                    norm_expected = self._normalize_text(expected_text)
-                    norm_trans = self._normalize_text(trans_text)
-                    norm_ratio = difflib.SequenceMatcher(
-                        None, norm_expected, norm_trans
-                    ).ratio()
-                    
-                    combined_ratio = max(ratio, norm_ratio)
 
-                    if combined_ratio > highest_ratio:
-                        highest_ratio = combined_ratio
+                    if ratio > highest_ratio:
+                        highest_ratio = combined_ratio = ratio # Keep simple ratio for first pass
                         best_match = transcribed
                         best_words = transcribed.get('words', [])
 
@@ -110,6 +106,108 @@ class DialogueAligner:
                         'original': expected,
                         'aligned': None
                     })
+
+            # 3. Outlier Detection and Localized Re-search
+            # If segment N was found out of sequence, re-search in gap.
+            for i in range(len(aligned_results)):
+                # Determine local search window
+                gap_start = 0.0
+                gap_end = audio.shape[0] / 16000.0 # Full duration
+
+                # Check neighbors to define the valid chronological window
+                if i > 0:
+                    prev = aligned_results[i-1].get('aligned')
+                    if prev: gap_start = prev['end']
+
+                if i < len(aligned_results) - 1:
+                    nxt = aligned_results[i+1].get('aligned')
+                    if nxt: gap_end = nxt['start']
+
+                curr = aligned_results[i].get('aligned')
+                is_outlier = False
+
+                if curr:
+                    # Out of order if not within neighbors' bounds
+                    if curr['start'] < gap_start - 0.5 or curr['end'] > gap_end + 0.5:
+                        is_outlier = True
+                else:
+                    # If no match found at all, it's a candidate for gap search
+                    is_outlier = True
+
+                if is_outlier:
+                    expected_text = aligned_results[i]['original'].get('text_ro', '').strip()
+
+                    best_local_match = None
+                    highest_local_ratio = 0.0
+
+                    for transcribed in transcribed_segments:
+                        # Only look in the gap
+                        if transcribed['start'] >= gap_start - 0.5 and transcribed['end'] <= gap_end + 0.5:
+                            ratio = difflib.SequenceMatcher(None, self._normalize_text(expected_text), transcribed['text'].strip().lower()).ratio()
+                            if ratio > highest_local_ratio:
+                                highest_local_ratio = ratio
+                                best_local_match = transcribed
+
+                    if best_local_match and highest_local_ratio >= 0.3:
+                        aligned_results[i]['aligned'] = {
+                            'start': best_local_match['start'],
+                            'end': best_local_match['end'],
+                            'text': best_local_match['text'],
+                            'confidence': highest_local_ratio,
+                            'words': best_local_match.get('words', [])
+                        }
+                    else:
+                        # Fallback: Chronological Interpolation
+                        # If we still haven't found it, place it linearly in the gap
+                        # based on its position relative to other missing segments in this same gap
+                        missing_in_gap = []
+                        my_idx_in_missing = 0
+
+                        # Count how many are missing between our gap boundaries
+                        low_bound_idx = -1
+                        for j in range(i - 1, -1, -1):
+                            if aligned_results[j]['aligned']:
+                                low_bound_idx = j
+                                break
+
+                        high_bound_idx = len(aligned_results)
+                        for j in range(i + 1, len(aligned_results)):
+                            if aligned_results[j]['aligned']:
+                                high_bound_idx = j
+                                break
+
+                        gap_count = high_bound_idx - low_bound_idx - 1
+                        my_pos = i - low_bound_idx
+
+                        gap_dur = gap_end - gap_start
+                        chunk_dur = gap_dur / max(1, gap_count)
+
+                        est_start = gap_start + (my_pos - 1) * chunk_dur
+                        est_end = est_start + chunk_dur
+
+                        aligned_results[i]['aligned'] = {
+                            'start': est_start,
+                            'end': est_end,
+                            'text': "[Estimated Position]",
+                            'confidence': 0.1,
+                            'words': []
+                        }
+
+            # 4. Third Pass: Word-Level Verification
+            # Double check that the final aligned text actually matches the expected Romanian text
+            for entry in aligned_results:
+                aligned = entry.get('aligned')
+                if not aligned:
+                    continue
+
+                expected_text = self._normalize_text(entry['original'].get('text_ro', ''))
+                aligned_text = self._normalize_text(aligned.get('text', ''))
+
+                # If similarity is very low, mark as low confidence
+                ratio = difflib.SequenceMatcher(None, expected_text, aligned_text).ratio()
+                if ratio < 0.3:
+                    logger.warning(f"Low word match confidence for segment: {expected_text} vs {aligned_text}")
+                    aligned['confidence'] = min(aligned['confidence'], ratio)
 
             return aligned_results
 

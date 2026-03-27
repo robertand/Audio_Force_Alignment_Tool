@@ -131,6 +131,18 @@ class AudioProcessor:
 
         return segment
     
+    def detect_onsets(self, audio, sr, backtrack=True):
+        """Detect onsets (energy 'humps') in the audio"""
+        try:
+            # Use RMS envelope for onset detection
+            hop_length = 512
+            onset_env = librosa.onset.onset_strength(y=audio, sr=sr, hop_length=hop_length)
+            onsets = librosa.onset.onset_detect(onset_envelope=onset_env, sr=sr, hop_length=hop_length, backtrack=backtrack)
+            return librosa.frames_to_time(onsets, sr=sr, hop_length=hop_length)
+        except Exception as e:
+            logger.error(f"Onset detection failed: {e}")
+            return []
+
     def detect_silence(self, audio, sr, threshold=0.01, min_silence_duration=0.1):
         """Detect silence regions in audio"""
         # Compute energy

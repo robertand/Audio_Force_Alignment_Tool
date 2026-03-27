@@ -6,6 +6,7 @@
     <title>Audio Force Alignment Tool</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.min.js"></script>
+    <script src="https://unpkg.com/wavesurfer.js@7/dist/plugins/regions.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
         @keyframes pulse {
@@ -167,6 +168,15 @@
                         <h2 class="text-2xl font-semibold">Review and Adjust Segments</h2>
                     </div>
                     <div class="flex space-x-2">
+                        <button class="bg-indigo-600 text-white px-3 py-2 rounded-lg hover:bg-indigo-700 transition-colors text-xs font-bold" onclick="previewProject()">
+                            <i class="fas fa-play-circle mr-1"></i> Preview Project
+                        </button>
+                        <button class="bg-indigo-500 text-white px-3 py-2 rounded-lg hover:bg-indigo-600 transition-colors text-xs font-bold" onclick="adjustAllSourceTimes(-0.5, 0)">
+                            <i class="fas fa-step-backward mr-1"></i> -0.5s In
+                        </button>
+                        <button class="bg-indigo-500 text-white px-3 py-2 rounded-lg hover:bg-indigo-600 transition-colors text-xs font-bold" onclick="adjustAllSourceTimes(0, 0.5)">
+                            <i class="fas fa-step-forward mr-1"></i> +0.5s Out
+                        </button>
                         <button class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors text-sm" id="exportCsvBtn">
                             <i class="fas fa-file-csv mr-2"></i>CSV
                         </button>
@@ -262,6 +272,7 @@
         let currentJobId = null;
         let jobAlignmentResults = null;
         let activeAudio = null;
+        let previewActive = false; // Flag to control Project Preview
         let speakerWaveforms = {}; // Cache for speaker waveform peaks
 
         // Initialize
@@ -493,6 +504,9 @@
                 block.innerHTML = `
                     <div class="p-4 bg-gray-50 flex items-center justify-between border-b">
                         <div class="flex items-center space-x-4">
+                            <button onclick="previewSegment(this, '${seg.speaker}', ${index})" class="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 hover:bg-indigo-600 hover:text-white transition-colors">
+                                <i class="fas fa-play"></i>
+                            </button>
                             <span class="font-bold text-indigo-900">${seg.speaker}</span>
                             <span class="text-sm text-gray-600 italic truncate max-w-md" title="${seg.text_ro}">${seg.text_ro}</span>
                         </div>
@@ -514,9 +528,6 @@
                                 <input type="number" step="0.01" min="0.5" max="2.0" class="w-14 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center tempo" value="1.00">
                                 <span class="text-xs text-gray-400">x</span>
                             </div>
-                            <button onclick="previewSegment(this, '${seg.speaker}', ${index})" class="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 hover:bg-indigo-600 hover:text-white transition-colors">
-                                <i class="fas fa-play"></i>
-                            </button>
                         </div>
                     </div>
                     <div class="p-2 relative bg-gray-50/50">
@@ -537,6 +548,7 @@
         }
 
         let waveforms = {};
+        let regions = {};
 
         function initWaveform(index, speaker, start, end) {
             const container = document.getElementById(`waveform-${index}`);
@@ -554,7 +566,13 @@
                 duration: speakerData.duration,
             });
 
+            const wsRegions = ws.registerPlugin(WaveSurfer.Regions.create());
             waveforms[index] = ws;
+            regions[index] = wsRegions;
+
+            ws.on('ready', () => {
+                updateView();
+            });
 
             const block = document.getElementById(`seg-${index}`);
             const inputs = block.querySelectorAll('input');
@@ -570,6 +588,16 @@
                 if (!isNaN(s) && !isNaN(e) && e > s) {
                     ws.zoom(container.clientWidth / (e - s));
                     container.scrollLeft = s * (container.scrollWidth / speakerData.duration);
+
+                    // Update region visualization (vertical bars)
+                    regions[index].clearRegions();
+                    regions[index].addRegion({
+                        start: s,
+                        end: e,
+                        color: 'rgba(99, 102, 241, 0.2)',
+                        drag: false,
+                        resize: false
+                    });
                 }
 
                 // Update Delta Label
@@ -604,6 +632,7 @@
 
                 if (activeAudio === btn.audio) {
                     activeAudio = null;
+                    previewActive = false; // Stop preview if manual stop
                     return;
                 }
             }
@@ -793,6 +822,116 @@
 
             html += '</div>';
             resultsDiv.innerHTML = html;
+        }
+
+        function adjustAllSourceTimes(startDelta, endDelta) {
+            const blocks = Array.from(document.querySelectorAll('#segmentList > div'));
+
+            // For each speaker, we need to enforce no-overlap
+            const speakerBlocks = {};
+            blocks.forEach(block => {
+                const speaker = block.querySelector('.text-indigo-900').textContent;
+                if (!speakerBlocks[speaker]) speakerBlocks[speaker] = [];
+                speakerBlocks[speaker].push(block);
+            });
+
+            for (const speaker in speakerBlocks) {
+                const sBlocks = speakerBlocks[speaker];
+                sBlocks.forEach((block, idx) => {
+                    const startInput = block.querySelector('.source-start');
+                    const endInput = block.querySelector('.source-end');
+
+                    if (!startInput || !endInput) return;
+
+                    // 1. Apply Adjustment
+                    if (startDelta !== 0) {
+                        const val = parseFloat(startInput.value);
+                        if (!isNaN(val)) {
+                            startInput.value = Math.max(0, val + startDelta).toFixed(2);
+                        }
+                    }
+
+                    if (endDelta !== 0) {
+                        const val = parseFloat(endInput.value);
+                        if (!isNaN(val)) {
+                            endInput.value = Math.max(parseFloat(startInput.value) + 0.1, val + endDelta).toFixed(2);
+                        }
+                    }
+
+                    // 2. Enforce No-Overlap with PREVIOUS
+                    if (idx > 0) {
+                        const prevEndInput = sBlocks[idx-1].querySelector('.source-end');
+                        const curStartVal = parseFloat(startInput.value);
+                        const prevEndVal = parseFloat(prevEndInput.value);
+
+                        if (curStartVal < prevEndVal) {
+                            // Trim current start to prev end
+                            startInput.value = prevEndVal.toFixed(2);
+
+                            // Adjust end if needed
+                            if (parseFloat(endInput.value) <= parseFloat(startInput.value)) {
+                                endInput.value = (parseFloat(startInput.value) + 0.1).toFixed(2);
+                            }
+                        }
+                    }
+
+                    // Dispatch events to refresh waveforms
+                    startInput.dispatchEvent(new Event('input'));
+                    endInput.dispatchEvent(new Event('input'));
+                });
+            }
+            showToast(`Adjusted all segments: ${startDelta !== 0 ? 'In ' + (startDelta > 0 ? '+' : '') + startDelta + 's' : ''} ${endDelta !== 0 ? 'Out ' + (endDelta > 0 ? '+' : '') + endDelta + 's' : ''}`, 'success');
+        }
+
+        async function previewProject() {
+            if (previewActive) {
+                previewActive = false;
+                if (activeAudio) activeAudio.pause();
+                showToast('Preview Stopped', 'info');
+                return;
+            }
+
+            const blocks = Array.from(document.querySelectorAll('#segmentList > div'));
+            const segments = blocks.map((block, index) => ({
+                index,
+                speaker: block.querySelector('.text-indigo-900').textContent,
+                csv_start: parseFloat(block.querySelector('.csv-start').value),
+                source_start: parseFloat(block.querySelector('.source-start').value),
+                source_end: parseFloat(block.querySelector('.source-end').value),
+                tempo: parseFloat(block.querySelector('.tempo').value) || 1.0,
+                btn: block.querySelector('button')
+            }));
+
+            // Sort by target timecode (chronological order of final output)
+            segments.sort((a, b) => a.csv_start - b.csv_start);
+
+            if (segments.length === 0) return;
+
+            previewActive = true;
+            showToast('Starting Project Preview (Click again to stop)', 'info');
+
+            for (const seg of segments) {
+                if (!previewActive) break;
+
+                // Flash the segment block
+                const el = document.getElementById(`seg-${seg.index}`);
+                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                el.classList.add('bg-indigo-50');
+
+                // Play and wait
+                await new Promise(resolve => {
+                    const duration = (seg.source_end - seg.source_start) / seg.tempo;
+                    previewSegment(seg.btn, seg.speaker, seg.index);
+
+                    setTimeout(() => {
+                        el.classList.remove('bg-indigo-50');
+                        resolve();
+                    }, (duration * 1000) + 200); // 200ms gap
+                });
+
+                if (!activeAudio || !previewActive) break; // Interrupted
+            }
+            previewActive = false;
         }
 
         function startNew() {
