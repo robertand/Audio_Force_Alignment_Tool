@@ -27,9 +27,10 @@
 
         /* Custom WaveSurfer Regions Styling */
         .wavesurfer-region {
-            border-left: 2px solid #ef4444 !important;
-            border-right: 2px solid #ef4444 !important;
-            background-color: rgba(239, 68, 68, 0.1) !important;
+            border: 2px solid rgba(0,0,0,0.2) !important;
+            border-radius: 4px !important;
+            pointer-events: auto !important;
+            z-index: 100 !important;
         }
 
         .wavesurfer-region-handle {
@@ -235,10 +236,18 @@
                             </button>
                         </div>
                     </div>
-                    <div class="flex space-x-2">
-                        <button class="bg-indigo-600 text-white px-3 py-2 rounded-lg hover:bg-indigo-700 transition-colors text-xs font-bold" onclick="previewProject()">
-                            <i class="fas fa-play-circle mr-1"></i> Preview Project
-                        </button>
+                    <div class="flex items-center space-x-2">
+                        <!-- Playback Controls -->
+                        <div class="flex bg-gray-100 p-1 rounded-lg mr-2">
+                            <button id="playBtn" class="flex items-center space-x-2 px-3 h-8 rounded-md text-indigo-600 hover:bg-white hover:shadow transition-all" onclick="toggleProjectPlayback()" title="Play Project">
+                                <i class="fas fa-play"></i>
+                                <span class="text-xs font-bold">Play Project</span>
+                            </button>
+                            <button id="stopBtn" class="w-10 h-8 rounded-md text-red-600 hover:bg-white hover:shadow transition-all" onclick="stopProjectPlayback()" title="Stop / Reset">
+                                <i class="fas fa-stop"></i>
+                            </button>
+                        </div>
+
                         <button class="bg-indigo-500 text-white px-3 py-2 rounded-lg hover:bg-indigo-600 transition-colors text-xs font-bold" onclick="adjustAllSourceTimes(-0.5, 0)">
                             <i class="fas fa-step-backward mr-1"></i> -0.5s In
                         </button>
@@ -263,7 +272,13 @@
                 <div id="timelineView" class="hidden space-y-8">
                     <div id="projectTimeline" class="bg-white rounded-xl shadow-lg p-6 border border-gray-100">
                         <div class="flex items-center justify-between mb-4">
-                            <h3 class="text-lg font-bold text-gray-800">Project Timeline (CSV Timecodes)</h3>
+                            <div class="flex items-center space-x-4">
+                                <h3 class="text-lg font-bold text-gray-800">Project Timeline (CSV Timecodes)</h3>
+                                <div class="flex items-center space-x-2 bg-gray-50 px-3 py-1 rounded-full border border-gray-200">
+                                    <i class="fas fa-search-plus text-gray-400 text-xs"></i>
+                                    <input type="range" id="timelineZoom" min="1" max="100" value="1" class="w-32 h-1 bg-gray-200 rounded-lg appearance-none cursor-pointer">
+                                </div>
+                            </div>
                             <div class="text-xs text-gray-500 uppercase tracking-widest font-semibold">
                                 Drag or resize blocks to adjust CSV timing
                             </div>
@@ -305,6 +320,9 @@
     <div id="toast" class="fixed bottom-4 right-4 bg-gray-900 text-white px-6 py-3 rounded-lg shadow-lg transform transition-transform duration-300 translate-y-full"></div>
 
     <script>
+        // --- Constants ---
+        const silentWavData = "data:audio/wav;base64,UklGRjIAAABXQVZFRm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YREAAAAAAAAAAAAAAAAAAAAA";
+
         // System info
         async function loadSystemInfo() {
             try {
@@ -357,6 +375,7 @@
         let speakerWaveforms = {}; // Cache for speaker waveform peaks
         let currentView = 'detailed';
         let projectWS = null;
+        let projectRegions = null;
 
         function toggleView(view) {
             currentView = view;
@@ -407,17 +426,12 @@
             const container = document.getElementById('timeline-ws-project');
             if (!container || !jobAlignmentResults) return;
 
-            if (projectWS) {
-                try { projectWS.destroy(); } catch(e) {}
-            }
-
             const maxCsvEnd = jobAlignmentResults.length > 0 ? Math.max(...jobAlignmentResults.map(s => parseFloat(s.csv_end) || 0)) : 0;
             const duration = Math.max(60, maxCsvEnd + 10);
 
             const pointsPerSec = 100;
             const totalSamples = Math.ceil(duration * pointsPerSec);
             const globalPeaks = new Float32Array(totalSamples * 2);
-            let hasNonZero = false;
 
             jobAlignmentResults.forEach(seg => {
                 const speakerData = speakerWaveforms[seg.speaker];
@@ -445,52 +459,75 @@
                 for (let i = 0; i < targetLen; i++) {
                     const targetIdx = (targetStartIdx + i) * 2;
                     if (targetIdx + 1 >= globalPeaks.length) break;
-
                     const srcIdx = Math.floor((i / targetLen) * segmentPeaks.length);
                     const val = Math.abs(segmentPeaks[srcIdx] || 0);
-
-                    // Produce symmetric interleaved peaks
                     globalPeaks[targetIdx] = Math.min(globalPeaks[targetIdx], -val);
                     globalPeaks[targetIdx + 1] = Math.max(globalPeaks[targetIdx + 1], val);
-                    if (val > 0.001) hasNonZero = true;
                 }
             });
 
-            console.log(`Rendered project timeline: duration=${duration}s, peaks=${globalPeaks.length}, hasAudio=${hasNonZero}`);
+            if (!projectWS) {
+                projectWS = WaveSurfer.create({
+                    container: container,
+                    waveColor: '#4b5563',
+                    progressColor: 'rgba(99, 102, 241, 0.2)',
+                    height: 128,
+                    interact: true,
+                    cursorWidth: 4,
+                    cursorColor: '#ef4444',
+                    fillParent: false,
+                    minPxPerSec: 10,
+                    barWidth: 2,
+                    barGap: 1,
+                    url: silentWavData,
+                    peaks: [globalPeaks],
+                    duration: duration
+                });
 
-            const silentWavData = "data:audio/wav;base64,UklGRjIAAABXQVZFRm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YREAAAAAAAAAAAAAAAAAAAAA";
+                projectRegions = projectWS.registerPlugin(WaveSurfer.Regions.create());
+                projectWS.registerPlugin(WaveSurfer.Timeline.create({
+                    height: 20,
+                    insertPosition: 'beforebegin',
+                    style: { fontSize: '10px', color: '#475569' },
+                }));
 
-            projectWS = WaveSurfer.create({
-                container: container,
-                waveColor: '#4b5563',
-                progressColor: 'transparent',
-                height: 128,
-                interact: true,
-                cursorWidth: 2,
-                cursorColor: '#6366f1',
-                fillParent: true,
-                minPxPerSec: 1,
-                barWidth: 2,
-                barGap: 1,
-                url: silentWavData,
-                peaks: [globalPeaks],
-                duration: duration
-            });
+                projectRegions.on('region-updated', (region) => {
+                    const index = parseInt(region.id.replace('csv-region-', ''));
+                    if (!isNaN(index) && jobAlignmentResults[index]) {
+                        jobAlignmentResults[index].csv_start = region.start;
+                        jobAlignmentResults[index].csv_end = region.end;
+                        const block = document.getElementById(`seg-${index}`);
+                        if (block) {
+                            block.querySelector('.csv-start').value = region.start.toFixed(2);
+                            block.querySelector('.csv-end').value = region.end.toFixed(2);
+                            block.querySelector('.csv-start').dispatchEvent(new Event('input', { bubbles: true }));
+                        }
+                    }
+                });
 
-            const wsRegions = projectWS.registerPlugin(WaveSurfer.Regions.create());
-            projectWS.registerPlugin(WaveSurfer.Timeline.create({
-                height: 20,
-                insertPosition: 'beforebegin',
-                style: { fontSize: '10px', color: '#475569' },
-            }));
+                // Update peaks and regions after interaction
+                projectRegions.on('region-update-end', () => {
+                    setTimeout(renderProjectTimeline, 10);
+                });
 
-            // Regions adding
+                const zoomSlider = document.getElementById('timelineZoom');
+                if (zoomSlider) {
+                    zoomSlider.addEventListener('input', (e) => {
+                        projectWS.zoom(parseFloat(e.target.value));
+                    });
+                    zoomSlider.value = projectWS.options.minPxPerSec;
+                }
+            } else {
+                projectWS.load("", [globalPeaks], duration);
+            }
+
+            // Clear and re-add regions
+            projectRegions.clearRegions();
             const speakerColors = {};
             const baseColors = [
-                'rgba(99, 102, 241, 0.3)', 'rgba(16, 185, 129, 0.3)', 'rgba(245, 158, 11, 0.3)',
-                'rgba(239, 68, 68, 0.3)', 'rgba(139, 92, 246, 0.3)', 'rgba(236, 72, 153, 0.3)'
+                'rgba(99, 102, 241, 0.4)', 'rgba(16, 185, 129, 0.4)', 'rgba(245, 158, 11, 0.4)',
+                'rgba(239, 68, 68, 0.4)', 'rgba(139, 92, 246, 0.4)', 'rgba(236, 72, 153, 0.4)'
             ];
-
             const speakers = [...new Set(jobAlignmentResults.map(s => s.speaker))];
             speakers.forEach((s, i) => speakerColors[s] = baseColors[i % baseColors.length]);
 
@@ -506,7 +543,7 @@
                     <div class="text-[10px] font-normal italic text-gray-700 leading-tight line-clamp-2 mt-1">${seg.text_ro}</div>
                 `;
 
-                const region = wsRegions.addRegion({
+                projectRegions.addRegion({
                     id: `csv-region-${index}`,
                     start: cS,
                     end: cE,
@@ -515,66 +552,6 @@
                     resize: true,
                     content: content
                 });
-
-                if (region.element) {
-                    region.element.style.border = '1px solid rgba(0,0,0,0.1)';
-                    region.element.style.borderRadius = '4px';
-                    region.element.style.overflow = 'hidden';
-                }
-            });
-
-            let renderTimeout = null;
-            wsRegions.on('region-updated', (region) => {
-                const index = parseInt(region.id.replace('csv-region-', ''));
-                if (!isNaN(index) && jobAlignmentResults[index]) {
-                    jobAlignmentResults[index].csv_start = region.start;
-                    jobAlignmentResults[index].csv_end = region.end;
-
-                    const block = document.getElementById(`seg-${index}`);
-                    if (block) {
-                        block.querySelector('.csv-start').value = region.start.toFixed(2);
-                        block.querySelector('.csv-end').value = region.end.toFixed(2);
-                        block.querySelector('.csv-start').dispatchEvent(new Event('input', { bubbles: true }));
-                    }
-
-                    // Debounce waveform re-render to keep performance high during dragging
-                    if (renderTimeout) clearTimeout(renderTimeout);
-                    renderTimeout = setTimeout(() => {
-                        // For a real-time feel, we only update the global peaks and redraw
-                        // To avoid flickering, we don't destroy/recreate the whole WaveSurfer
-                        const newMaxCsvEnd = Math.max(...jobAlignmentResults.map(s => parseFloat(s.csv_end) || 0));
-                        if (newMaxCsvEnd + 10 > duration) {
-                            renderProjectTimeline(); // Need full re-render if duration grows
-                        } else {
-                            // Update globalPeaks array and call loadPeaks
-                            const newGlobalPeaks = new Float32Array(totalSamples * 2);
-                            jobAlignmentResults.forEach(seg => {
-                                const speakerData = speakerWaveforms[seg.speaker];
-                                if (!speakerData || !speakerData.peaks) return;
-                                const sPeaks = speakerData.peaks;
-                                const sPPS = sPeaks.length / speakerData.duration;
-                                const sS = parseFloat(seg.source_start), sE = parseFloat(seg.source_end);
-                                const cS = parseFloat(seg.csv_start), tempo = parseFloat(seg.tempo || 1.0);
-                                let sIdx = Math.floor(sS * sPPS), eIdx = Math.ceil(sE * sPPS);
-                                const segPeaks = sPeaks.slice(sIdx, eIdx);
-                                const tSIdx = Math.floor(cS * pointsPerSec);
-                                const tD = Math.max(0.1, (sE - sS) / tempo);
-                                const tEIdx = tSIdx + Math.ceil(tD * pointsPerSec);
-                                const tL = tEIdx - tSIdx;
-                                if (tL <= 0 || segPeaks.length === 0) return;
-                                for (let i = 0; i < tL; i++) {
-                                    const tIdx = (tSIdx + i) * 2;
-                                    if (tIdx + 1 >= newGlobalPeaks.length) break;
-                                    const srcIdx = Math.floor((i / tL) * segPeaks.length);
-                                    const val = Math.abs(segPeaks[srcIdx] || 0);
-                                    newGlobalPeaks[tIdx] = Math.min(newGlobalPeaks[tIdx], -val);
-                                    newGlobalPeaks[tIdx + 1] = Math.max(newGlobalPeaks[tIdx + 1], val);
-                                }
-                            });
-                            projectWS.load("", [newGlobalPeaks], duration);
-                        }
-                    }, 150);
-                }
             });
         }
 
@@ -862,7 +839,6 @@
         function initWaveform(index, speaker, start, end) {
             const container = document.getElementById(`waveform-${index}`);
             const speakerData = speakerWaveforms[speaker];
-            const silentWavData = "data:audio/wav;base64,UklGRjIAAABXQVZFRm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YREAAAAAAAAAAAAAAAAAAAAA";
 
             if (!speakerData || !speakerData.peaks) return;
 
@@ -1260,43 +1236,146 @@
             showToast(`Adjusted all segments: ${startDelta !== 0 ? 'In ' + (startDelta > 0 ? '+' : '') + startDelta + 's' : ''} ${endDelta !== 0 ? 'Out ' + (endDelta > 0 ? '+' : '') + endDelta + 's' : ''}`, 'success');
         }
 
-        async function previewProject() {
+        let isProjectPlaying = false;
+        let currentPlaybackSegmentIndex = 0;
+        let playbackAbortController = null;
+
+        function stopProjectPlayback() {
+            isProjectPlaying = false;
+            if (playbackAbortController) {
+                playbackAbortController.abort();
+                playbackAbortController = null;
+            }
+            if (activeAudio) {
+                activeAudio.pause();
+                const oldBtn = activeAudio.btn;
+                if (oldBtn) oldBtn.innerHTML = '<i class="fas fa-play"></i>';
+                activeAudio = null;
+            }
+            currentPlaybackSegmentIndex = 0;
+            document.getElementById('playBtn').innerHTML = '<i class="fas fa-play"></i><span class="text-xs font-bold">Play Project</span>';
+            if (projectWS) projectWS.setTime(0);
+
+            // Remove highlighted states
+            document.querySelectorAll('#segmentList > div').forEach(el => el.classList.remove('bg-indigo-50'));
+            // Reset all waveforms to their start positions
+            jobAlignmentResults.forEach((seg, idx) => {
+                if (waveforms[idx]) waveforms[idx].setTime(seg.source_start);
+            });
+        }
+
+        async function toggleProjectPlayback() {
+            if (isProjectPlaying) {
+                // Pause
+                isProjectPlaying = false;
+                if (playbackAbortController) playbackAbortController.abort();
+                if (activeAudio) activeAudio.pause();
+                document.getElementById('playBtn').innerHTML = '<i class="fas fa-play"></i><span class="text-xs font-bold">Play Project</span>';
+            } else {
+                // Play
+                isProjectPlaying = true;
+                document.getElementById('playBtn').innerHTML = '<i class="fas fa-pause"></i><span class="text-xs font-bold">Pause Project</span>';
+                playbackAbortController = new AbortController();
+                startPlaybackLoop(playbackAbortController.signal);
+            }
+        }
+
+        async function startPlaybackLoop(signal) {
             const blocks = Array.from(document.querySelectorAll('#segmentList > div'));
             const segments = blocks.map((block, index) => ({
                 index,
                 speaker: block.querySelector('.text-indigo-900').textContent,
                 csv_start: parseFloat(block.querySelector('.csv-start').value),
+                csv_end: parseFloat(block.querySelector('.csv-end').value),
                 source_start: parseFloat(block.querySelector('.source-start').value),
                 source_end: parseFloat(block.querySelector('.source-end').value),
                 tempo: parseFloat(block.querySelector('.tempo').value) || 1.0,
                 btn: block.querySelector('button')
             }));
 
-            // Sort by target timecode (chronological order of final output)
+            // Sort by CSV timecode
             segments.sort((a, b) => a.csv_start - b.csv_start);
 
-            if (segments.length === 0) return;
+            for (let i = currentPlaybackSegmentIndex; i < segments.length; i++) {
+                if (signal.aborted || !isProjectPlaying) {
+                    currentPlaybackSegmentIndex = i;
+                    return;
+                }
 
-            showToast('Starting Project Preview (Sequential by CSV timecodes)', 'info');
-
-            for (const seg of segments) {
-                // Flash the segment block
+                const seg = segments[i];
                 const el = document.getElementById(`seg-${seg.index}`);
+
+                // Highlight current segment
+                document.querySelectorAll('#segmentList > div').forEach(div => div.classList.remove('bg-indigo-50'));
                 el.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 el.classList.add('bg-indigo-50');
 
-                // Play and wait
-                await new Promise(resolve => {
+                // Play this segment
+                await new Promise((resolve, reject) => {
+                    // Update current global index
+                    currentPlaybackSegmentIndex = i;
+
+                    const url = `/api/original-audio/${currentJobId}/${seg.speaker}`;
+                    const audio = new Audio(url);
+                    audio.playbackRate = seg.tempo;
+                    activeAudio = audio;
+                    audio.btn = seg.btn;
+                    seg.btn.innerHTML = '<i class="fas fa-stop"></i>';
+
                     const duration = (seg.source_end - seg.source_start) / seg.tempo;
-                    previewSegment(seg.btn, seg.speaker, seg.index);
+                    const ws = waveforms[seg.index];
 
+                    audio.addEventListener('loadedmetadata', () => {
+                        audio.currentTime = seg.source_start;
+                        audio.play();
+
+                        audio.ontimeupdate = () => {
+                            if (!isProjectPlaying || signal.aborted) return;
+
+                            // Update local waveform playhead
+                            if (ws) ws.setTime(audio.currentTime);
+
+                            // Update global project timeline playhead
+                            if (projectWS) {
+                                // Progress within segment
+                                const segmentProgress = (audio.currentTime - seg.source_start) / (seg.source_end - seg.source_start);
+                                const globalTime = seg.csv_start + segmentProgress * (seg.csv_end - seg.csv_start);
+                                projectWS.setTime(globalTime);
+                            }
+
+                            if (audio.currentTime >= seg.source_end) {
+                                audio.pause();
+                                resolve();
+                            }
+                        };
+                    });
+
+                    audio.onpause = () => {
+                        seg.btn.innerHTML = '<i class="fas fa-play"></i>';
+                    };
+
+                    audio.onended = resolve;
+
+                    signal.addEventListener('abort', () => {
+                        audio.pause();
+                        reject(new Error('aborted'));
+                    });
+
+                    // Timeout safety
                     setTimeout(() => {
-                        el.classList.remove('bg-indigo-50');
-                        resolve();
-                    }, (duration * 1000) + 200); // 200ms gap
+                        if (activeAudio === audio && audio.paused === false) {
+                            audio.pause();
+                            resolve();
+                        }
+                    }, (duration * 1000) + 500);
+                }).catch(err => {
+                    if (err.message !== 'aborted') console.error(err);
                 });
+            }
 
-                if (activeAudio === null) break; // Interrupted
+            // Loop finished
+            if (isProjectPlaying && !signal.aborted) {
+                stopProjectPlayback();
             }
         }
 
