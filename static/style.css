@@ -1,40 +1,114 @@
+/* Global Modern Reset */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
 body {
-    background-color: #f8f9fa;
+    font-family: 'Inter', sans-serif;
+    color: #1f2937;
+    background-color: #f3f4f6;
+    margin: 0;
+    padding: 0;
 }
 
-.card {
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    border: none;
+/* Scrollbar Modern */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
 }
 
-.card-header {
-    background-color: #007bff;
-    color: white;
-    font-weight: bold;
+::-webkit-scrollbar-track {
+    background: transparent;
 }
 
-.progress {
-    height: 30px;
+::-webkit-scrollbar-thumb {
+    background: #d1d5db;
+    border-radius: 10px;
 }
 
-.list-group-item {
-    margin-bottom: 10px;
-    border-radius: 5px;
+::-webkit-scrollbar-thumb:hover {
+    background: #9ca3af;
 }
 
-audio {
-    width: 200px;
-    height: 30px;
+/* Layout Utilities */
+.sidebar-active {
+    background-color: #f3f4f6;
+    border-right: 4px solid #4f46e5;
 }
 
-.btn-sm {
-    margin-left: 10px;
+/* Animations */
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
 }
 
-.table {
-    font-size: 0.9rem;
+#assetInfo {
+    animation: fadeIn 0.4s ease-out;
 }
 
-.table td, .table th {
-    padding: 0.5rem;
+/* Document Content Styling (Mammoth.js integration) */
+#docContent {
+    line-height: 1.6;
+}
+
+#docContent h1, #docContent h2, #docContent h3 {
+    font-weight: 700;
+    color: #111827;
+    margin-top: 1.5em;
+    margin-bottom: 0.5em;
+}
+
+#docContent p {
+    margin-bottom: 1em;
+}
+
+#docContent img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 8px;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+}
+
+#docContent table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1em 0;
+}
+
+#docContent th, #docContent td {
+    padding: 0.75rem;
+    border: 1px solid #e5e7eb;
+}
+
+/* Video Player Styles */
+video {
+    outline: none;
+}
+
+/* Glassmorphism Elements */
+.glass {
+    background: rgba(255, 255, 255, 0.7);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+/* Custom transitions */
+.transition-opacity {
+    transition: opacity 300ms ease;
+}
+
+.transition-transform {
+    transition: transform 300ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Toast behavior */
+#toast.translate-y-24 {
+    transform: translateY(6rem);
+}
+
+#toast.opacity-0 {
+    opacity: 0;
+}
+
+#toast {
+    transform: translateY(0);
+    opacity: 1;
 }
