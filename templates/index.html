@@ -1237,8 +1237,8 @@
         }
 
         let isProjectPlaying = false;
-        let currentPlaybackSegmentIndex = 0;
         let playbackAbortController = null;
+        let activeProjectAudio = new Map(); // index -> Audio
 
         function stopProjectPlayback() {
             isProjectPlaying = false;
@@ -1246,21 +1246,29 @@
                 playbackAbortController.abort();
                 playbackAbortController = null;
             }
+
+            // Stop all audio
             if (activeAudio) {
                 activeAudio.pause();
-                const oldBtn = activeAudio.btn;
-                if (oldBtn) oldBtn.innerHTML = '<i class="fas fa-play"></i>';
+                if (activeAudio.btn) activeAudio.btn.innerHTML = '<i class="fas fa-play"></i>';
                 activeAudio = null;
             }
-            currentPlaybackSegmentIndex = 0;
+            activeProjectAudio.forEach(a => a.pause());
+            activeProjectAudio.clear();
+
             document.getElementById('playBtn').innerHTML = '<i class="fas fa-play"></i><span class="text-xs font-bold">Play Project</span>';
             if (projectWS) projectWS.setTime(0);
 
             // Remove highlighted states
             document.querySelectorAll('#segmentList > div').forEach(el => el.classList.remove('bg-indigo-50'));
-            // Reset all waveforms to their start positions
+            // Reset all waveforms to their start positions and reset buttons
             jobAlignmentResults.forEach((seg, idx) => {
                 if (waveforms[idx]) waveforms[idx].setTime(seg.source_start);
+                const block = document.getElementById(`seg-${idx}`);
+                if (block) {
+                    const btn = block.querySelector('button');
+                    if (btn) btn.innerHTML = '<i class="fas fa-play"></i>';
+                }
             });
         }
 
@@ -1269,114 +1277,108 @@
                 // Pause
                 isProjectPlaying = false;
                 if (playbackAbortController) playbackAbortController.abort();
-                if (activeAudio) activeAudio.pause();
+                activeProjectAudio.forEach(a => a.pause());
+                activeProjectAudio.clear();
                 document.getElementById('playBtn').innerHTML = '<i class="fas fa-play"></i><span class="text-xs font-bold">Play Project</span>';
             } else {
                 // Play
+                if (activeAudio) {
+                    activeAudio.pause();
+                    if (activeAudio.btn) activeAudio.btn.innerHTML = '<i class="fas fa-play"></i>';
+                    activeAudio = null;
+                }
+
                 isProjectPlaying = true;
                 document.getElementById('playBtn').innerHTML = '<i class="fas fa-pause"></i><span class="text-xs font-bold">Pause Project</span>';
+
                 playbackAbortController = new AbortController();
                 startPlaybackLoop(playbackAbortController.signal);
             }
         }
 
         async function startPlaybackLoop(signal) {
-            const blocks = Array.from(document.querySelectorAll('#segmentList > div'));
-            const segments = blocks.map((block, index) => ({
+            const segments = jobAlignmentResults.map((seg, index) => ({
                 index,
-                speaker: block.querySelector('.text-indigo-900').textContent,
-                csv_start: parseFloat(block.querySelector('.csv-start').value),
-                csv_end: parseFloat(block.querySelector('.csv-end').value),
-                source_start: parseFloat(block.querySelector('.source-start').value),
-                source_end: parseFloat(block.querySelector('.source-end').value),
-                tempo: parseFloat(block.querySelector('.tempo').value) || 1.0,
-                btn: block.querySelector('button')
+                ...seg,
+                block: document.getElementById(`seg-${index}`),
+                btn: document.getElementById(`seg-${index}`).querySelector('button')
             }));
 
-            // Sort by CSV timecode
-            segments.sort((a, b) => a.csv_start - b.csv_start);
+            const startTime = performance.now();
+            const startTimelineTime = projectWS.getCurrentTime();
 
-            for (let i = currentPlaybackSegmentIndex; i < segments.length; i++) {
+            // Interaction listener to handle seeking while playing
+            const interactionHandler = () => {
+                if (isProjectPlaying) {
+                    if (playbackAbortController) playbackAbortController.abort();
+                    activeProjectAudio.forEach(a => a.pause());
+                    activeProjectAudio.clear();
+                    playbackAbortController = new AbortController();
+                    startPlaybackLoop(playbackAbortController.signal);
+                }
+            };
+            const unbindInteraction = projectWS.once('interaction', interactionHandler);
+            signal.addEventListener('abort', unbindInteraction);
+
+            const update = () => {
                 if (signal.aborted || !isProjectPlaying) {
-                    currentPlaybackSegmentIndex = i;
                     return;
                 }
 
-                const seg = segments[i];
-                const el = document.getElementById(`seg-${seg.index}`);
+                const elapsed = (performance.now() - startTime) / 1000;
+                const currentTime = startTimelineTime + elapsed;
 
-                // Highlight current segment
-                document.querySelectorAll('#segmentList > div').forEach(div => div.classList.remove('bg-indigo-50'));
-                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                el.classList.add('bg-indigo-50');
+                if (currentTime >= projectWS.getDuration()) {
+                    stopProjectPlayback();
+                    return;
+                }
 
-                // Play this segment
-                await new Promise((resolve, reject) => {
-                    // Update current global index
-                    currentPlaybackSegmentIndex = i;
+                projectWS.setTime(currentTime);
 
-                    const url = `/api/original-audio/${currentJobId}/${seg.speaker}`;
-                    const audio = new Audio(url);
-                    audio.playbackRate = seg.tempo;
-                    activeAudio = audio;
-                    audio.btn = seg.btn;
-                    seg.btn.innerHTML = '<i class="fas fa-stop"></i>';
+                segments.forEach(seg => {
+                    const isInside = currentTime >= seg.csv_start && currentTime < seg.csv_end;
+                    const isPlaying = activeProjectAudio.has(seg.index);
 
-                    const duration = (seg.source_end - seg.source_start) / seg.tempo;
-                    const ws = waveforms[seg.index];
+                    if (isInside && !isPlaying) {
+                        // Start playing
+                        const url = `/api/original-audio/${currentJobId}/${seg.speaker}`;
+                        const audio = new Audio(url);
+                        audio.playbackRate = seg.tempo;
 
-                    audio.addEventListener('loadedmetadata', () => {
-                        audio.currentTime = seg.source_start;
-                        audio.play();
+                        // Calculate where to start in the source file
+                        const offsetInCsv = currentTime - seg.csv_start;
+                        audio.currentTime = seg.source_start + (offsetInCsv * seg.tempo);
 
-                        audio.ontimeupdate = () => {
-                            if (!isProjectPlaying || signal.aborted) return;
+                        audio.play().catch(e => console.error("Playback failed", e));
+                        activeProjectAudio.set(seg.index, audio);
 
-                            // Update local waveform playhead
-                            if (ws) ws.setTime(audio.currentTime);
-
-                            // Update global project timeline playhead
-                            if (projectWS) {
-                                // Progress within segment
-                                const segmentProgress = (audio.currentTime - seg.source_start) / (seg.source_end - seg.source_start);
-                                const globalTime = seg.csv_start + segmentProgress * (seg.csv_end - seg.csv_start);
-                                projectWS.setTime(globalTime);
-                            }
-
-                            if (audio.currentTime >= seg.source_end) {
-                                audio.pause();
-                                resolve();
-                            }
-                        };
-                    });
-
-                    audio.onpause = () => {
-                        seg.btn.innerHTML = '<i class="fas fa-play"></i>';
-                    };
-
-                    audio.onended = resolve;
-
-                    signal.addEventListener('abort', () => {
+                        // UI highlight
+                        seg.block.classList.add('bg-indigo-50');
+                        seg.block.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                        seg.btn.innerHTML = '<i class="fas fa-stop"></i>';
+                    } else if (!isInside && isPlaying) {
+                        // Stop playing
+                        const audio = activeProjectAudio.get(seg.index);
                         audio.pause();
-                        reject(new Error('aborted'));
-                    });
+                        activeProjectAudio.delete(seg.index);
 
-                    // Timeout safety
-                    setTimeout(() => {
-                        if (activeAudio === audio && audio.paused === false) {
-                            audio.pause();
-                            resolve();
+                        // UI reset
+                        seg.block.classList.remove('bg-indigo-50');
+                        seg.btn.innerHTML = '<i class="fas fa-play"></i>';
+                        if (waveforms[seg.index]) waveforms[seg.index].setTime(seg.source_start);
+                    } else if (isInside && isPlaying) {
+                        // Sync local waveform
+                        const audio = activeProjectAudio.get(seg.index);
+                        if (waveforms[seg.index]) {
+                            waveforms[seg.index].setTime(audio.currentTime);
                         }
-                    }, (duration * 1000) + 500);
-                }).catch(err => {
-                    if (err.message !== 'aborted') console.error(err);
+                    }
                 });
-            }
 
-            // Loop finished
-            if (isProjectPlaying && !signal.aborted) {
-                stopProjectPlayback();
-            }
+                requestAnimationFrame(update);
+            };
+
+            requestAnimationFrame(update);
         }
 
         async function realignFromHere(speaker, index, btn) {
