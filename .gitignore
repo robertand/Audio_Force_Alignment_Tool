@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+uploads/
+outputs/
+*.log
+*.wav
+.pytest_cache/
+verification/
+node_modules/
+test-results/
+tests/*.png
+tests/test_audio.wav
+tests/test_data.csv
+sample_metadata.csv
+test_results.txt
