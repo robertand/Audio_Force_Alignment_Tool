@@ -134,14 +134,28 @@ class AudioProcessor:
     def detect_onsets(self, audio, sr, backtrack=True):
         """Detect onsets (energy 'humps') in the audio"""
         try:
-            # Use RMS envelope for onset detection
-            hop_length = 512
-            onset_env = librosa.onset.onset_strength(y=audio, sr=sr, hop_length=hop_length)
-            onsets = librosa.onset.onset_detect(onset_envelope=onset_env, sr=sr, hop_length=hop_length, backtrack=backtrack)
+            # Use RMS envelope for onset detection with better sensitivity for speech
+            # We use a smaller hop_length and specific parameters for dialogue
+            hop_length = 160 # 10ms at 16k
+            onset_env = librosa.onset.onset_strength(
+                y=audio, sr=sr, hop_length=hop_length,
+                aggregate=np.median,
+                fmax=8000, n_mels=128
+            )
+            onsets = librosa.onset.onset_detect(
+                onset_envelope=onset_env, sr=sr, hop_length=hop_length,
+                backtrack=backtrack,
+                pre_max=20, post_max=20, pre_avg=100, post_avg=100,
+                delta=0.2, wait=30 # Increased wait to avoid detecting multiple onsets for one word
+            )
             return librosa.frames_to_time(onsets, sr=sr, hop_length=hop_length)
         except Exception as e:
             logger.error(f"Onset detection failed: {e}")
             return []
+
+    def get_segment_onsets(self, onsets, start_time, end_time):
+        """Filter global onsets to find those within a specific time range"""
+        return [o for o in onsets if start_time <= o <= end_time]
 
     def detect_silence(self, audio, sr, threshold=0.01, min_silence_duration=0.1):
         """Detect silence regions in audio"""

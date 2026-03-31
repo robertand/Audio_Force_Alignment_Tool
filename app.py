@@ -60,7 +60,7 @@ jobs_lock = threading.Lock()
 
 # Lazy-loaded aligners with GPU support
 _whisper_aligner = None
-_mms_aligner = None
+_whisperx_aligner = None
 aligner_lock = threading.Lock()
 
 def get_whisper_aligner(model_name="base"):
@@ -69,25 +69,36 @@ def get_whisper_aligner(model_name="base"):
         if _whisper_aligner is None:
             try:
                 from utils.whisper_aligner import DialogueAligner
+                logger.info(f"💾 Loading initial Whisper model: {model_name}")
                 _whisper_aligner = DialogueAligner(model_name=model_name, device=device)
             except Exception as e:
                 logger.error(f"Failed to load Whisper aligner: {e}")
                 return None
         elif _whisper_aligner.current_model_name != model_name:
-            _whisper_aligner.ensure_model(model_name, device)
+            logger.info(f"💾 Switching cached Whisper model from {_whisper_aligner.current_model_name} to {model_name}")
+            _whisper_aligner.ensure_model(model_name)
+        else:
+            logger.info(f"💾 Reusing cached Whisper model: {model_name}")
         return _whisper_aligner
 
-def get_mms_aligner():
-    global _mms_aligner
+def get_whisperx_aligner(model_name="TransferRapid/whisper-large-v3-turbo_ro"):
+    global _whisperx_aligner
     with aligner_lock:
-        if _mms_aligner is None:
+        if _whisperx_aligner is None:
             try:
-                from utils.mms_aligner import MMSDialogueAligner
-                _mms_aligner = MMSDialogueAligner(device=device)
+                from utils.whisperx_aligner import WhisperXAligner
+                logger.info(f"💾 Loading initial WhisperX model: {model_name}")
+                _whisperx_aligner = WhisperXAligner(model_name=model_name, device=device)
             except Exception as e:
-                logger.error(f"Failed to load MMS aligner: {e}")
+                logger.error(f"Failed to load WhisperX aligner: {e}")
                 return None
-        return _mms_aligner
+        else:
+            if _whisperx_aligner.current_model_name != model_name:
+                logger.info(f"💾 Switching cached WhisperX model from {_whisperx_aligner.current_model_name} to {model_name}")
+                _whisperx_aligner.ensure_model(model_name)
+            else:
+                logger.info(f"💾 Reusing cached WhisperX model: {model_name}")
+        return _whisperx_aligner
 
 def cleanup_old_jobs():
     """Periodically remove jobs older than JOB_TIMEOUT"""
@@ -138,19 +149,80 @@ cleanup_thread = threading.Thread(target=cleanup_old_jobs, daemon=True)
 cleanup_thread.start()
 logger.info("Cleanup thread started")
 
+def apply_alignment_post_processing(alignments, onsets, preceding_end=None):
+    """
+    Apply common refinement rules to alignments:
+    1. Silence Crop (Hump detection)
+    2. Hump-to-Word Rule (Trim if too many humps)
+    3. End Padding (+0.5s)
+    4. NO OVERLAP Rule
+    """
+    from utils.text_utils import clean_text_for_alignment
+
+    # 1. & 2. Silence Crop and Hump-to-Word
+    for idx_p, entry in enumerate(alignments):
+        aligned = entry.get('aligned')
+        if not aligned:
+            continue
+
+        # Find first onset in or near segment for start refinement
+        current_start = aligned['start']
+        first_local_onset = None
+        for onset in onsets:
+            if abs(onset - current_start) < 1.0: # 1s window
+                first_local_onset = onset
+                break
+
+        if first_local_onset is not None:
+            aligned['start'] = max(0, first_local_onset - 0.1)
+
+        # Hump-to-Word Rule
+        expected_text = clean_text_for_alignment(entry['original'].get('text_ro', ''))
+        num_words = len(expected_text.split())
+
+        if num_words > 0:
+            # Get onsets in current segment
+            seg_onsets = [o for o in onsets if aligned['start'] <= o <= aligned['end']]
+
+            if len(seg_onsets) > num_words:
+                # Trim to shortly after last valid word's hump
+                aligned['end'] = seg_onsets[num_words-1] + 0.2
+
+        # 3. Add 0.5s Default Padding to End
+        aligned['end'] += 0.5
+
+    # 4. Apply NO OVERLAP Rule
+    for i in range(len(alignments)):
+        curr = alignments[i].get('aligned')
+        if not curr: continue
+
+        # Compare with preceding end boundary
+        effective_prev_end = preceding_end if (i == 0) else (alignments[i-1].get('aligned')['end'] if alignments[i-1].get('aligned') else None)
+
+        if effective_prev_end is not None:
+            # Loosen overlap rule for high confidence matches
+            min_gap = 0.01 if (curr.get('confidence', 0) > 0.8) else 0.05
+
+            if curr['start'] < effective_prev_end + min_gap:
+                curr['start'] = effective_prev_end + min_gap
+                if curr['end'] <= curr['start']:
+                    curr['end'] = curr['start'] + 0.1
+
+    return alignments
+
 def background_alignment(job_id, segments, speakers_to_process, audio_files_info, 
-                        use_whisper, model_name, initial_prompt, use_mms=False):
+                        use_whisper, model_name, initial_prompt, use_whisperx=False):
     """Background task for alignment processing"""
     try:
         aligner = None
-        if use_whisper:
+        if use_whisperx:
+            aligner = get_whisperx_aligner(model_name)
+            if aligner is None:
+                raise Exception("Failed to initialize WhisperX aligner")
+        elif use_whisper:
             aligner = get_whisper_aligner(model_name)
             if aligner is None:
                 raise Exception("Failed to initialize Whisper aligner")
-        elif use_mms:
-            aligner = get_mms_aligner()
-            if aligner is None:
-                raise Exception("Failed to initialize MMS aligner")
 
         all_alignments = []
         total_duration = max(s['end'] for s in segments) if segments else 0
@@ -178,6 +250,10 @@ def background_alignment(job_id, segments, speakers_to_process, audio_files_info
             # Filter segments for this character
             char_segments = [s for s in segments if s['speaker'] == speaker]
 
+            # Detect onsets for the speaker's audio (used for hump-to-word logic)
+            speaker_audio, speaker_sr = audio_processor.load_audio(audio_path)
+            onsets = audio_processor.detect_onsets(speaker_audio, speaker_sr)
+
             # Identify first 10% of segments for hump-based refinement
             num_refinement_segments = max(1, len(char_segments) // 10)
 
@@ -193,69 +269,11 @@ def background_alignment(job_id, segments, speakers_to_process, audio_files_info
                     logger.error(f"Alignment failed for {speaker}: {e}")
                     alignments = [{'original': seg, 'aligned': None} for seg in char_segments]
 
-                # Post-process for first 10% refinement
+                # Post-process for refinement using onsets
                 try:
-                    # Reuse audio if already loaded for extraction (efficiency)
-                    audio_full, sr_full = audio_processor.load_audio(audio_path)
-                    onsets = audio_processor.detect_onsets(audio_full, sr_full)
-
                     if alignments and onsets is not None and len(onsets) > 0:
-                        for idx_align, entry in enumerate(alignments[:num_refinement_segments]):
-                            aligned = entry.get('aligned')
-                            if aligned:
-                                # Find first onset after Whisper's suggested start
-                                current_start = aligned['start']
-                                closest_onset = None
-
-                                for onset in onsets:
-                                    if abs(onset - current_start) < 0.5: # 500ms window
-                                        closest_onset = onset
-                                        break
-
-                                if closest_onset is not None:
-                                    aligned['start'] = closest_onset
-
-                        # Systematic cropping and padding for ALL segments
-                        # Crop leading silence and add 0.5s padding to end
-                        for idx_p, entry in enumerate(alignments):
-                            aligned = entry.get('aligned')
-                            if not aligned:
-                                continue
-
-                            # 1. Silence Crop (Find first onset in or near segment)
-                            current_start = aligned['start']
-                            first_local_onset = None
-                            for onset in onsets:
-                                if abs(onset - current_start) < 1.0: # 1s window
-                                    first_local_onset = onset
-                                    break
-
-                            if first_local_onset is not None:
-                                # Crop to 100ms before first sound (Hump detection)
-                                # This implements the "crop around waveform" request
-                                aligned['start'] = max(0, first_local_onset - 0.1)
-                            else:
-                                # Fallback: already starts at Whisper detection
-                                pass
-
-                            # 2. Add 0.5s Default Padding to End (User requested +0.5s default)
-                            aligned['end'] += 0.5
-
-                        # 3. Apply NO OVERLAP Rule
-                        for i in range(1, len(alignments)):
-                            prev = alignments[i-1].get('aligned')
-                            curr = alignments[i].get('aligned')
-
-                            if prev and curr:
-                                # Ensure current start is at least the previous end
-                                if curr['start'] < prev['end']:
-                                    # If overlapping, we favor the previous segment (sequential order)
-                                    # and start current immediately after previous
-                                    curr['start'] = prev['end']
-
-                                    # Ensure segment still has duration
-                                    if curr['end'] <= curr['start']:
-                                        curr['end'] = curr['start'] + 0.1
+                        # Apply general post-processing
+                        alignments = apply_alignment_post_processing(alignments, onsets)
 
                         # Special case for VERY first segment: Force start at 0:00
                         # and refine duration based on word count vs. onsets
@@ -384,6 +402,7 @@ def process_audio():
         # Get metadata and settings
         segments = json.loads(request.form.get('segments', '[]'))
         use_whisper = request.form.get('use_whisper') == 'true'
+        use_whisperx = request.form.get('use_whisperx') == 'true'
         use_mms = request.form.get('use_mms') == 'true'
         speakers_to_process = request.form.getlist('speakers')
         model_name = request.form.get('whisper_model', 'base')
@@ -441,8 +460,9 @@ def process_audio():
                 'metadata': {
                     'speakers': speakers_to_process,
                     'use_whisper': use_whisper,
+                    'use_whisperx': use_whisperx,
                     'use_mms': use_mms,
-                    'model': model_name if use_whisper else 'none',
+                    'model': model_name if (use_whisper or use_whisperx) else 'none',
                     'segment_count': len(segments)
                 }
             }
@@ -451,7 +471,7 @@ def process_audio():
         thread = threading.Thread(
             target=background_alignment,
             args=(job_id, segments, speakers_to_process, audio_files_info, 
-                  use_whisper, model_name, initial_prompt, use_mms)
+                  use_whisper, model_name, initial_prompt, use_whisperx)
         )
         thread.daemon = True
         thread.start()
@@ -665,6 +685,130 @@ def get_waveform_data(job_id, speaker):
     except Exception as e:
         logger.error(f"Waveform data error: {e}")
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/realign', methods=['POST'])
+def realign_segments():
+    """Re-align segments starting from a specific index with a time offset"""
+    try:
+        data = request.json
+        job_id = data.get('job_id')
+        speaker = data.get('speaker')
+        start_index = data.get('start_index')
+        offset_time = float(data.get('offset_time', 0.0))
+        current_alignments = data.get('current_alignments', [])
+
+        if not job_id or not speaker or start_index is None:
+            return jsonify({'success': False, 'error': 'Missing parameters'}), 400
+
+        with jobs_lock:
+            job = JOBS.get(job_id)
+            if not job:
+                return jsonify({'success': False, 'error': 'Job not found'}), 404
+
+            # 1. Update existing results with current UI state to preserve manual edits
+            if current_alignments:
+                for idx, adj in enumerate(current_alignments):
+                    if idx < len(job['results']):
+                        job['results'][idx].update({
+                            'source_start': adj['source_start'],
+                            'source_end': adj['source_end'],
+                            'tempo': adj['tempo']
+                        })
+
+            # Find all results and their original indices for this speaker
+            all_results = job.get('results', [])
+            speaker_data = [(idx, r) for idx, r in enumerate(all_results) if r['speaker'] == speaker]
+
+            if start_index >= len(speaker_data):
+                return jsonify({'success': False, 'error': 'Invalid start index'}), 400
+
+            # Identify segments and their indices to re-align
+            indices_to_update = [item[0] for item in speaker_data[start_index:]]
+            segments_to_realign = [item[1] for item in speaker_data[start_index:]]
+
+            # Get original metadata for these segments
+            expected_segments = []
+            for r in segments_to_realign:
+                expected_segments.append({
+                    'start': r['csv_start'],
+                    'end': r['csv_end'],
+                    'speaker': r['speaker'],
+                    'text_ro': r['text_ro'],
+                    'text_en': r['text_en']
+                })
+
+            # Find audio path
+            audio_path = None
+            for file_info in job.get('files', []):
+                if speaker in file_info.get('path', ''):
+                    audio_path = file_info.get('path')
+                    break
+
+            if not audio_path:
+                return jsonify({'success': False, 'error': 'Audio not found'}), 404
+
+        # Initialize Aligner (using singleton getters to keep model loaded)
+        use_whisperx = job['metadata'].get('use_whisperx', False)
+        use_whisper = job['metadata'].get('use_whisper', False)
+        model_name = job['metadata'].get('model', 'base')
+
+        aligner = None
+        if use_whisperx:
+            aligner = get_whisperx_aligner(model_name)
+        elif use_whisper:
+            aligner = get_whisper_aligner(model_name)
+
+        if aligner is None:
+            return jsonify({'success': False, 'error': 'Aligner not available'}), 500
+
+        # Re-align with offset
+        # Provide text context from preceding segment for better linguistic context
+        initial_prompt = ""
+        if start_index > 0:
+            initial_prompt = speaker_data[start_index - 1][1].get('text_ro', '')
+
+        new_alignments = aligner.align_character_audio(
+            audio_path, expected_segments,
+            language="ro",
+            offset_time=offset_time,
+            initial_prompt=initial_prompt
+        )
+
+        # Determine the preceding end boundary for the first segment in the batch
+        preceding_end = None
+        if start_index > 0:
+            preceding_end = speaker_data[start_index - 1][1].get('source_end')
+
+        # Apply post-processing refinement to new alignments
+        speaker_audio, speaker_sr = audio_processor.load_audio(audio_path)
+        onsets = audio_processor.detect_onsets(speaker_audio, speaker_sr)
+        new_alignments = apply_alignment_post_processing(new_alignments, onsets, preceding_end=preceding_end)
+
+        # Update job results with newly aligned segments using exact indices
+        with jobs_lock:
+            for i, new_entry in enumerate(new_alignments):
+                if i < len(indices_to_update):
+                    global_idx = indices_to_update[i]
+                    orig = new_entry['original']
+                    aligned = new_entry.get('aligned')
+
+                    update_info = {
+                        'source_start': aligned.get('start', 0) if aligned else 0,
+                        'source_end': aligned.get('end', orig['end'] - orig['start']) if aligned else orig['end'] - orig['start'],
+                        'confidence': aligned.get('confidence', 0.0) if aligned else 0.0
+                    }
+
+                    job['results'][global_idx].update(update_info)
+
+        return jsonify({
+            'success': True,
+            'message': f'Re-aligned {len(new_alignments)} segments',
+            'results': job['results']
+        })
+
+    except Exception as e:
+        logger.error(f"Re-align error: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/job/<job_id>')
 def job_status(job_id):

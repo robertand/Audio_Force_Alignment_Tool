@@ -13,18 +13,27 @@ class DialogueAligner:
         logger.info(f"Loading Whisper {model_name} on {self.device}")
         self.model = whisper.load_model(model_name, device=self.device)
 
-    def ensure_model(self, model_name, device=None):
+    def ensure_model(self, model_name):
         if model_name != self.current_model_name:
-            logger.info(f"Switching to Whisper {model_name} on {device or self.device}")
-            self.model = whisper.load_model(model_name, device=device or self.device)
+            logger.info(f"Switching to Whisper {model_name} on {self.device}")
+
+            # Free memory
+            if hasattr(self, 'model'):
+                del self.model
+                if self.device == "cuda":
+                    torch.cuda.empty_cache()
+
+            self.model = whisper.load_model(model_name, device=self.device)
             self.current_model_name = model_name
 
     def align_character_audio(self, audio_path, expected_segments, language="ro", 
                               initial_prompt=None, model_name=None, 
-                              min_confidence=0.4, use_word_timestamps=True):
+                              min_confidence=0.4, use_word_timestamps=True, offset_time=0.0, **kwargs):
         """
         Transcribe audio and align with expected segments from metadata
         """
+        from utils.text_utils import clean_text_for_alignment
+
         if model_name:
             self.ensure_model(model_name)
 
@@ -33,6 +42,14 @@ class DialogueAligner:
             import librosa
             audio, sr = librosa.load(audio_path, sr=16000)
             
+            # Add context look-back padding if starting from offset
+            lookback_padding = 0.5 if offset_time > 0.5 else 0.0
+
+            if offset_time > 0:
+                # Slice audio to start from offset (with small look-back for context)
+                start_sample = int((offset_time - lookback_padding) * sr)
+                audio = audio[start_sample:]
+
             # Move to GPU if available
             if self.device == "cuda":
                 audio = torch.from_numpy(audio).to(self.device)
@@ -57,7 +74,7 @@ class DialogueAligner:
 
             # First Pass: Find High-Confidence Anchor Segments
             for expected in expected_segments:
-                expected_text = expected.get('text_ro', '').strip()
+                expected_text = clean_text_for_alignment(expected.get('text_ro', ''))
                 if not expected_text:
                     aligned_results.append({'original': expected, 'aligned': None})
                     continue
@@ -65,17 +82,23 @@ class DialogueAligner:
                 best_match = None
                 highest_ratio = 0.0
                 for transcribed in transcribed_segments:
-                    ratio = difflib.SequenceMatcher(None, self._normalize_text(expected_text), self._normalize_text(transcribed['text'])).ratio()
+                    # Normalize both for comparison
+                    norm_trans = self._normalize_text(transcribed['text'])
+                    ratio = difflib.SequenceMatcher(None, expected_text, norm_trans).ratio()
                     if ratio > highest_ratio:
                         highest_ratio = ratio
                         best_match = transcribed
 
-                if best_match and highest_ratio > 0.7: # High threshold for anchors
+                if best_match and highest_ratio > 0.6: # Loosened anchor threshold
+                    # Adjust for lookback_padding
+                    m_start = best_match['start'] - lookback_padding
+                    m_end = best_match['end'] - lookback_padding
+
                     aligned_results.append({
                         'original': expected,
                         'aligned': {
-                            'start': best_match['start'],
-                            'end': best_match['end'],
+                            'start': m_start + offset_time,
+                            'end': m_end + offset_time,
                             'text': best_match['text'],
                             'confidence': highest_ratio,
                             'words': best_match.get('words', [])
@@ -90,8 +113,9 @@ class DialogueAligner:
                     continue # Already anchored
 
                 # Determine valid gap window
-                gap_start = 0.0
-                gap_end = audio.shape[0] / 16000.0 # Full duration
+                # Start from offset_time if no preceding anchor is found
+                gap_start = offset_time
+                gap_end = (audio.shape[0] / 16000.0) + offset_time # Full duration relative to global timeline
 
                 # Look back for nearest preceding anchor
                 for j in range(i - 1, -1, -1):
@@ -105,22 +129,28 @@ class DialogueAligner:
                         gap_end = aligned_results[j]['aligned']['start']
                         break
 
-                expected_text = aligned_results[i]['original'].get('text_ro', '').strip()
+                expected_text = clean_text_for_alignment(aligned_results[i]['original'].get('text_ro', ''))
                 best_local_match = None
                 highest_local_ratio = 0.0
 
                 for transcribed in transcribed_segments:
-                    # Match must be within the gap
-                    if transcribed['start'] >= gap_start - 0.2 and transcribed['end'] <= gap_end + 0.2:
-                        ratio = difflib.SequenceMatcher(None, self._normalize_text(expected_text), self._normalize_text(transcribed['text'])).ratio()
+                    # Normalize and adjust for lookback
+                    norm_trans = self._normalize_text(transcribed['text'])
+                    t_start = (transcribed['start'] - lookback_padding) + offset_time
+                    t_end = (transcribed['end'] - lookback_padding) + offset_time
+
+                    # Match must be within the gap (loosened window)
+                    if t_start >= gap_start - 0.5 and t_end <= gap_end + 0.5:
+                        ratio = difflib.SequenceMatcher(None, expected_text, norm_trans).ratio()
                         if ratio > highest_local_ratio:
                             highest_local_ratio = ratio
                             best_local_match = transcribed
+                            best_local_timing = (t_start, t_end)
 
-                if best_local_match and highest_local_ratio >= 0.3:
+                if best_local_match and highest_local_ratio >= 0.25: # Loosened gap threshold
                     aligned_results[i]['aligned'] = {
-                        'start': best_local_match['start'],
-                        'end': best_local_match['end'],
+                        'start': best_local_timing[0],
+                        'end': best_local_timing[1],
                         'text': best_local_match['text'],
                         'confidence': highest_local_ratio,
                         'words': best_local_match.get('words', [])
@@ -169,7 +199,7 @@ class DialogueAligner:
                 if not aligned:
                     continue
 
-                expected_text = self._normalize_text(entry['original'].get('text_ro', ''))
+                expected_text = clean_text_for_alignment(entry['original'].get('text_ro', ''))
                 aligned_text = self._normalize_text(aligned.get('text', ''))
 
                 # If similarity is very low, mark as low confidence

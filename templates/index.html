@@ -6,6 +6,7 @@
     <title>Audio Force Alignment Tool</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.min.js"></script>
+    <script src="https://unpkg.com/wavesurfer.js@7/dist/plugins/regions.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
         @keyframes pulse {
@@ -21,6 +22,53 @@
         .glass-effect {
             background: rgba(255, 255, 255, 0.95);
             backdrop-filter: blur(10px);
+        }
+
+        /* Custom WaveSurfer Regions Styling */
+        .wavesurfer-region {
+            border-left: 2px solid #ef4444 !important;
+            border-right: 2px solid #ef4444 !important;
+            background-color: rgba(239, 68, 68, 0.1) !important;
+        }
+
+        .wavesurfer-region-handle {
+            width: 14px !important;
+            max-width: 14px !important;
+            background-color: #ef4444 !important;
+            opacity: 1 !important;
+            z-index: 100 !important;
+            border: 1px solid white !important;
+        }
+
+        .wavesurfer-region-handle:hover {
+            background-color: #dc2626 !important;
+            cursor: col-resize;
+        }
+
+        .wavesurfer-region-handle-left::before {
+            content: 'IN';
+            position: absolute;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 8px;
+            font-weight: 900;
+            color: white;
+            pointer-events: none;
+            white-space: nowrap;
+        }
+
+        .wavesurfer-region-handle-right::before {
+            content: 'OUT';
+            position: absolute;
+            bottom: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 8px;
+            font-weight: 900;
+            color: white;
+            pointer-events: none;
+            white-space: nowrap;
         }
     </style>
 </head>
@@ -107,12 +155,12 @@
                                 <label class="block text-sm font-medium mb-1">Alignment Engine</label>
                                 <div class="space-y-2">
                                     <label class="flex items-center">
-                                        <input type="radio" name="aligner" value="whisper" checked class="mr-2">
-                                        <span>Whisper (High accuracy, GPU accelerated)</span>
+                                        <input type="radio" name="aligner" value="whisperx" checked class="mr-2">
+                                        <span>WhisperX (Ultra-exact timestamps, RO optimized)</span>
                                     </label>
                                     <label class="flex items-center">
-                                        <input type="radio" name="aligner" value="mms" class="mr-2">
-                                        <span>MMS (Fast, good for Romanian)</span>
+                                        <input type="radio" name="aligner" value="whisper" class="mr-2">
+                                        <span>Whisper (Standard accuracy)</span>
                                     </label>
                                     <label class="flex items-center">
                                         <input type="radio" name="aligner" value="none" class="mr-2">
@@ -125,11 +173,21 @@
                                 <div>
                                     <label class="block text-sm font-medium mb-1">Whisper Model</label>
                                     <select id="whisperModel" class="w-full border rounded-lg px-3 py-2">
-                                        <option value="tiny">Tiny (Fastest)</option>
-                                        <option value="base" selected>Base (Recommended)</option>
-                                        <option value="small">Small (Balanced)</option>
-                                        <option value="medium">Medium (Accurate)</option>
-                                        <option value="large">Large (Most accurate)</option>
+                                        <optgroup label="WhisperX (Forced Alignment)">
+                                            <option value="large-v3" selected>OpenAI Large v3 (Exact Timestamps)</option>
+                                            <option value="large-v2">OpenAI Large v2</option>
+                                            <option value="medium">Medium</option>
+                                        </optgroup>
+                                        <optgroup label="Standard Whisper (Fine-tuned RO)">
+                                            <option value="TransferRapid/whisper-large-v3-turbo_ro">RO Turbo (Best for RO text)</option>
+                                            <option value="iRaduS/whisper-romanian-finetune">RO Finetune (iRaduS)</option>
+                                        </optgroup>
+                                        <optgroup label="Standard Whisper (Other)">
+                                            <option value="large-v3">Large v3</option>
+                                            <option value="small">Small</option>
+                                            <option value="base">Base</option>
+                                            <option value="tiny">Tiny</option>
+                                        </optgroup>
                                     </select>
                                 </div>
                                 <div>
@@ -392,8 +450,8 @@
 
             const formData = new FormData();
             formData.append('segments', JSON.stringify(currentMetadata.segments));
+            formData.append('use_whisperx', aligner === 'whisperx');
             formData.append('use_whisper', aligner === 'whisper');
-            formData.append('use_mms', aligner === 'mms');
             formData.append('whisper_model', document.getElementById('whisperModel').value);
             formData.append('initial_prompt', document.getElementById('initialPrompt').value);
 
@@ -523,8 +581,11 @@
                             </div>
                             <div class="flex space-x-2 items-center">
                                 <label class="text-gray-500">Tempo:</label>
-                                <input type="number" step="0.01" min="0.5" max="2.0" class="w-14 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center tempo" value="1.00">
-                                <span class="text-xs text-gray-400">x</span>
+                                <input type="number" step="0.01" min="0.5" max="2.0" class="w-14 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center tempo" value="${seg.tempo || '1.00'}">
+                                <span class="text-xs text-gray-400 mr-2">x</span>
+                                <button onclick="realignFromHere('${seg.speaker}', ${index}, this)" class="text-indigo-600 hover:text-indigo-800 transition-colors" title="Re-align all following segments from this point">
+                                    <i class="fas fa-sync-alt"></i>
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -563,26 +624,93 @@
                 duration: speakerData.duration,
             });
 
+            // Initialize Regions plugin
+            const wsRegions = ws.registerPlugin(WaveSurfer.Regions.create());
+            ws.regions = wsRegions; // Store on ws for backward compatibility
+
             waveforms[index] = ws;
 
             ws.on('ready', () => {
+                const s = parseFloat(block.querySelector('.source-start').value);
+                ws.setTime(s);
                 updateView();
             });
 
             const block = document.getElementById(`seg-${index}`);
             const inputs = block.querySelectorAll('input');
 
-            const updateView = () => {
+            // Handle Region updates (dragging)
+            let isUpdatingFromRegion = false;
+            wsRegions.on('region-updated', (region) => {
+                isUpdatingFromRegion = true;
+                const startInput = block.querySelector('.source-start');
+                const endInput = block.querySelector('.source-end');
+
+                // Update inputs
+                startInput.value = region.start.toFixed(2);
+                endInput.value = region.end.toFixed(2);
+
+                // Trigger input event to update delta label
+                startInput.dispatchEvent(new Event('input', { bubbles: true }));
+                isUpdatingFromRegion = false;
+            });
+
+            const updateView = (fromInput = false) => {
                 const s = parseFloat(block.querySelector('.source-start').value);
                 const e = parseFloat(block.querySelector('.source-end').value);
                 const csvS = parseFloat(block.querySelector('.csv-start').value);
                 const csvE = parseFloat(block.querySelector('.csv-end').value);
                 const tempo = parseFloat(block.querySelector('.tempo').value) || 1.0;
 
-                // Update Waveform zoom/view
-                if (!isNaN(s) && !isNaN(e) && e > s) {
-                    ws.zoom(container.clientWidth / (e - s));
-                    container.scrollLeft = s * (container.scrollWidth / speakerData.duration);
+                // Only update region if called from input AND not currently updating from region drag
+                if (!isUpdatingFromRegion && (fromInput || wsRegions.getRegions().length === 0)) {
+                    wsRegions.clearRegions();
+                    wsRegions.addRegion({
+                        id: `region-${index}`,
+                        start: s,
+                        end: e,
+                        color: 'rgba(239, 68, 68, 0.1)',
+                        drag: true,
+                        resize: true
+                    });
+                }
+
+                // Update Waveform zoom/view with padding
+                if (!isNaN(s) && !isNaN(e) && e > s && !fromInput) {
+                    const padding = (e - s) * 0.2; // 20% padding
+                    const viewStart = Math.max(0, s - padding);
+                    const viewEnd = Math.min(speakerData.duration, e + padding);
+                    const viewDuration = viewEnd - viewStart;
+
+                    // Force a minimum width to ensure zoom calculation is stable
+                    const containerWidth = container.clientWidth || 800;
+                    const minPxPerSec = containerWidth / viewDuration;
+
+                    ws.zoom(minPxPerSec);
+
+                    // Use setTimeout to ensure zoom is applied before scrolling
+                    setTimeout(() => {
+                        // WaveSurfer 7: the container itself might have overflow-x: auto
+                        // or it might be an internal div. ws.getWrapper() is the canvas container.
+                        const wrapper = ws.getWrapper();
+                        if (wrapper) {
+                            // Find the first scrollable parent
+                            let scrollable = wrapper;
+                            while (scrollable && scrollable !== container) {
+                                if (window.getComputedStyle(scrollable).overflowX === 'auto' ||
+                                    window.getComputedStyle(scrollable).overflowX === 'scroll' ||
+                                    scrollable.scrollWidth > scrollable.clientWidth) {
+                                    break;
+                                }
+                                scrollable = scrollable.parentElement;
+                            }
+
+                            if (scrollable) {
+                                const scrollPos = viewStart * (wrapper.scrollWidth / speakerData.duration);
+                                scrollable.scrollLeft = scrollPos;
+                            }
+                        }
+                    }, 50);
                 }
 
                 // Update Delta Label
@@ -603,7 +731,10 @@
                 }
             };
 
-            inputs.forEach(input => input.addEventListener('input', updateView));
+            inputs.forEach(input => input.addEventListener('input', (e) => {
+                // updateView is called with fromInput=true to update region but NOT zoom/scroll
+                updateView(true);
+            }));
 
             // Initial view update
             setTimeout(updateView, 100);
@@ -645,18 +776,13 @@
 
                 // Sync waveform progress
                 const ws = waveforms[index];
-                const playStartTime = Date.now();
                 const duration = (end - start) / tempo;
 
-                const progressInterval = setInterval(() => {
-                    if (activeAudio !== audio || audio.paused) {
-                        clearInterval(progressInterval);
-                        return;
+                audio.ontimeupdate = () => {
+                    if (activeAudio === audio && !audio.paused) {
+                        ws.setTime(audio.currentTime);
                     }
-                    const elapsed = (Date.now() - playStartTime) / 1000;
-                    const currentPos = start + (elapsed * tempo);
-                    ws.setTime(currentPos);
-                }, 50);
+                };
 
                 setTimeout(() => {
                     if (activeAudio === audio) {
@@ -904,6 +1030,79 @@
                 });
 
                 if (activeAudio === null) break; // Interrupted
+            }
+        }
+
+        async function realignFromHere(speaker, index, btn) {
+            // Find start index within speaker's segments
+            const speakerResults = jobAlignmentResults.filter(r => r.speaker === speaker);
+            // We need to find the relative index for this speaker
+            let speakerIdx = -1;
+            let currentRelativeIdx = 0;
+            jobAlignmentResults.forEach((r, i) => {
+                if (r.speaker === speaker) {
+                    if (i === index) {
+                        speakerIdx = currentRelativeIdx;
+                    }
+                    currentRelativeIdx++;
+                }
+            });
+
+            if (speakerIdx === -1) return;
+
+            // Offset is the source_end of the segment PRECEDING the current one
+            // If it's the first segment for this speaker, offset is 0
+            let offsetTime = 0;
+            if (speakerIdx > 0) {
+                // We need to find the actual block for the preceding speaker segment
+                const precedingSpeakerSeg = speakerResults[speakerIdx - 1];
+                // Find global index of precedingSpeakerSeg
+                const globalIdx = jobAlignmentResults.findIndex(r => r === precedingSpeakerSeg);
+                const prevBlock = document.getElementById(`seg-${globalIdx}`);
+                if (prevBlock) {
+                    offsetTime = parseFloat(prevBlock.querySelector('.source-end').value);
+                }
+            }
+
+            // Collect all current adjustments to preserve them
+            const currentAlignments = Array.from(document.querySelectorAll('#segmentList > div')).map(el => ({
+                source_start: parseFloat(el.querySelector('.source-start').value),
+                source_end: parseFloat(el.querySelector('.source-end').value),
+                tempo: parseFloat(el.querySelector('.tempo').value) || 1.0
+            }));
+
+            showToast('Re-aligning following segments...', 'info');
+            const originalHtml = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+            btn.disabled = true;
+
+            try {
+                const response = await fetch('/api/realign', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        job_id: currentJobId,
+                        speaker: speaker,
+                        start_index: speakerIdx, // Start FROM the selected segment
+                        offset_time: offsetTime, // Note: backend uses this as starting point for text batch
+                        current_alignments: currentAlignments
+                    })
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    jobAlignmentResults = result.results;
+                    // Refresh Step 3 view
+                    showStep3(result.results);
+                    showToast('Re-alignment completed!', 'success');
+                } else {
+                    showToast('Re-alignment failed: ' + result.error, 'error');
+                }
+            } catch (error) {
+                showToast('Error during re-alignment: ' + error.message, 'error');
+            } finally {
+                btn.innerHTML = originalHtml;
+                btn.disabled = false;
             }
         }
 
