@@ -329,24 +329,24 @@
                 const response = await fetch('/api/system-info');
                 const data = await response.json();
                 
-                let infoHtml = '';
+                const container = document.getElementById('systemInfo');
+                container.innerHTML = '';
+                const wrapper = document.createElement('div');
+
                 if (data.gpu.available) {
-                    infoHtml = `
-                        <div class="flex items-center text-green-300">
-                            <i class="fas fa-microchip mr-2"></i>
-                            <span>GPU: ${data.gpu.name} (${data.gpu.memory})</span>
-                        </div>
-                    `;
+                    wrapper.className = "flex items-center text-green-300";
+                    wrapper.innerHTML = '<i class="fas fa-microchip mr-2"></i>';
+                    const span = document.createElement('span');
+                    span.textContent = `GPU: ${data.gpu.name} (${data.gpu.memory})`;
+                    wrapper.appendChild(span);
                 } else {
-                    infoHtml = `
-                        <div class="flex items-center text-yellow-300">
-                            <i class="fas fa-exclamation-triangle mr-2"></i>
-                            <span>CPU Mode (GPU not detected)</span>
-                        </div>
-                    `;
+                    wrapper.className = "flex items-center text-yellow-300";
+                    wrapper.innerHTML = '<i class="fas fa-exclamation-triangle mr-2"></i>';
+                    const span = document.createElement('span');
+                    span.textContent = 'CPU Mode (GPU not detected)';
+                    wrapper.appendChild(span);
                 }
-                
-                document.getElementById('systemInfo').innerHTML = infoHtml;
+                container.appendChild(wrapper);
             } catch (error) {
                 console.error('Failed to load system info:', error);
             }
@@ -373,6 +373,7 @@
         let jobAlignmentResults = null;
         let activeAudio = null;
         let speakerWaveforms = {}; // Cache for speaker waveform peaks
+        let speakerAudioPool = new Map(); // speaker -> Audio object
         let currentView = 'detailed';
         let projectWS = null;
         let projectRegions = null;
@@ -506,8 +507,22 @@
                 });
 
                 // Update peaks and regions after interaction
-                projectRegions.on('region-update-end', () => {
+                projectRegions.on('region-update-end', (region) => {
+                    // Update the block's visual peak state if needed
                     setTimeout(renderProjectTimeline, 10);
+                });
+
+                projectRegions.on('region-clicked', (region, e) => {
+                    e.stopPropagation();
+                    const index = parseInt(region.id.replace('csv-region-', ''));
+                    if (!isNaN(index)) {
+                        const block = document.getElementById(`seg-${index}`);
+                        if (block) {
+                            block.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            block.classList.add('ring-4', 'ring-indigo-400', 'ring-opacity-50');
+                            setTimeout(() => block.classList.remove('ring-4', 'ring-indigo-400', 'ring-opacity-50'), 2000);
+                        }
+                    }
                 });
 
                 const zoomSlider = document.getElementById('timelineZoom');
@@ -536,21 +551,49 @@
                 const cE = parseFloat(seg.csv_end);
                 if (cE <= cS) return;
 
+                const isActive = activeProjectAudio.has(index);
+                const baseColor = speakerColors[seg.speaker];
+                // Use higher opacity for active segment
+                const regionColor = isActive ? baseColor.replace('0.4', '0.7') : baseColor;
+
                 const content = document.createElement('div');
-                content.className = "w-full h-full relative p-1 pointer-events-none";
-                content.innerHTML = `
-                    <div class="text-[10px] font-bold text-gray-900 leading-none truncate mb-1">${seg.speaker}</div>
-                    <div class="text-[10px] font-normal italic text-gray-700 leading-tight line-clamp-2 mt-1">${seg.text_ro}</div>
-                `;
+                content.className = "w-full h-full relative p-1 pointer-events-none flex flex-col justify-between";
+
+                const topRow = document.createElement('div');
+                topRow.className = "flex items-center justify-between";
+
+                const speakerLabel = document.createElement('div');
+                speakerLabel.className = "text-[9px] font-black text-gray-900 leading-none truncate uppercase tracking-tighter";
+                speakerLabel.textContent = seg.speaker;
+                topRow.appendChild(speakerLabel);
+
+                if (isActive) {
+                    const volIcon = document.createElement('i');
+                    volIcon.className = "fas fa-volume-up text-[10px] text-indigo-700 animate-pulse";
+                    topRow.appendChild(volIcon);
+                }
+
+                const textLabel = document.createElement('div');
+                textLabel.className = "text-[10px] font-medium text-gray-800 leading-tight line-clamp-2 mb-1";
+                textLabel.textContent = seg.text_ro;
+
+                content.appendChild(topRow);
+                content.appendChild(textLabel);
 
                 projectRegions.addRegion({
                     id: `csv-region-${index}`,
                     start: cS,
                     end: cE,
-                    color: speakerColors[seg.speaker],
+                    color: regionColor,
                     drag: true,
                     resize: true,
-                    content: content
+                    content: content,
+                    style: {
+                        borderRadius: '6px',
+                        border: isActive ? '2px solid #4f46e5' : '1px solid rgba(0,0,0,0.1)',
+                        boxShadow: isActive ? '0 0 15px rgba(79, 70, 229, 0.4)' : 'none',
+                        transition: 'all 0.2s ease'
+                    }
                 });
             });
         }
@@ -606,22 +649,26 @@
                 <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <div>
                         <div class="text-sm text-blue-600">File</div>
-                        <div class="font-medium">${data.filename}</div>
+                        <div class="font-medium filename-label"></div>
                     </div>
                     <div>
                         <div class="text-sm text-blue-600">Speakers</div>
-                        <div class="font-medium">${data.stats.speaker_count}</div>
+                        <div class="font-medium speaker-count-label"></div>
                     </div>
                     <div>
                         <div class="text-sm text-blue-600">Segments</div>
-                        <div class="font-medium">${data.stats.total_segments}</div>
+                        <div class="font-medium total-segments-label"></div>
                     </div>
                     <div>
                         <div class="text-sm text-blue-600">Duration</div>
-                        <div class="font-medium">${data.stats.total_duration.toFixed(2)}s</div>
+                        <div class="font-medium total-duration-label"></div>
                     </div>
                 </div>
             `;
+            metadataInfo.querySelector('.filename-label').textContent = data.filename;
+            metadataInfo.querySelector('.speaker-count-label').textContent = data.stats.speaker_count;
+            metadataInfo.querySelector('.total-segments-label').textContent = data.stats.total_segments;
+            metadataInfo.querySelector('.total-duration-label').textContent = data.stats.total_duration.toFixed(2) + 's';
 
             const slotsDiv = document.getElementById('characterSlots');
             slotsDiv.innerHTML = '';
@@ -630,20 +677,48 @@
                 const count = data.stats.segments_per_speaker[speaker];
                 const slot = document.createElement('div');
                 slot.className = 'bg-gray-50 rounded-lg p-4 border border-gray-200';
-                slot.innerHTML = `
-                    <div class="flex items-center">
-                        <div class="flex items-center w-1/3">
-                            <input type="checkbox" class="speaker-select w-4 h-4 text-indigo-600 rounded" data-speaker="${speaker}" checked>
-                            <div class="ml-3">
-                                <div class="font-medium">${speaker}</div>
-                                <div class="text-xs text-gray-500">${count} segments</div>
-                            </div>
-                        </div>
-                        <div class="flex-1 ml-4">
-                            <input type="file" class="audio-input w-full text-sm" data-speaker="${speaker}" accept="audio/*">
-                        </div>
-                    </div>
-                `;
+
+                const flexContainer = document.createElement('div');
+                flexContainer.className = 'flex items-center';
+
+                const leftCol = document.createElement('div');
+                leftCol.className = 'flex items-center w-1/3';
+
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.className = 'speaker-select w-4 h-4 text-indigo-600 rounded';
+                checkbox.setAttribute('data-speaker', speaker);
+                checkbox.checked = true;
+
+                const nameContainer = document.createElement('div');
+                nameContainer.className = 'ml-3';
+
+                const nameDiv = document.createElement('div');
+                nameDiv.className = 'font-medium';
+                nameDiv.textContent = speaker;
+
+                const countDiv = document.createElement('div');
+                countDiv.className = 'text-xs text-gray-500';
+                countDiv.textContent = `${count} segments`;
+
+                nameContainer.appendChild(nameDiv);
+                nameContainer.appendChild(countDiv);
+                leftCol.appendChild(checkbox);
+                leftCol.appendChild(nameContainer);
+
+                const rightCol = document.createElement('div');
+                rightCol.className = 'flex-1 ml-4';
+
+                const audioInput = document.createElement('input');
+                audioInput.type = 'file';
+                audioInput.className = 'audio-input w-full text-sm';
+                audioInput.setAttribute('data-speaker', speaker);
+                audioInput.accept = 'audio/*';
+
+                rightCol.appendChild(audioInput);
+                flexContainer.appendChild(leftCol);
+                flexContainer.appendChild(rightCol);
+                slot.appendChild(flexContainer);
                 slotsDiv.appendChild(slot);
             });
         }
@@ -760,9 +835,10 @@
             const list = document.getElementById('segmentList');
             list.innerHTML = '';
 
-            // Prefetch waveforms for all unique speakers in parallel
+            // Prefetch waveforms and audio for all unique speakers in parallel
             const speakers = [...new Set(results.map(s => s.speaker))];
             await Promise.all(speakers.map(async (speaker) => {
+                // Prefetch waveform
                 if (!speakerWaveforms[speaker]) {
                     try {
                         const resp = await fetch(`/api/waveform-data/${currentJobId}/${speaker}`);
@@ -771,10 +847,20 @@
                         console.error(`Failed to load waveform for ${speaker}:`, e);
                     }
                 }
+                // Prefetch audio
+                if (!speakerAudioPool.has(speaker)) {
+                    const audio = new Audio(`/api/original-audio/${currentJobId}/${speaker}`);
+                    audio.preload = 'auto';
+                    speakerAudioPool.set(speaker, audio);
+                }
             }));
 
+            // Always initialize project timeline in background to ensure projectWS exists
+            await renderProjectTimeline();
+
             if (currentView === 'timeline') {
-                renderProjectTimeline();
+                document.getElementById('timelineView').classList.remove('hidden');
+                document.getElementById('detailedView').classList.add('hidden');
             }
 
             results.forEach((seg, index) => {
@@ -785,46 +871,76 @@
                 const block = document.createElement('div');
                 block.className = `bg-white rounded-xl shadow border-l-4 ${confidenceClass} overflow-hidden`;
                 block.id = `seg-${index}`;
-                block.innerHTML = `
-                    <div class="p-4 bg-gray-50 flex items-center justify-between border-b">
-                        <div class="flex items-center space-x-4">
-                            <button onclick="previewSegment(this, '${seg.speaker}', ${index})" class="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 hover:bg-indigo-600 hover:text-white transition-colors">
-                                <i class="fas fa-play"></i>
-                            </button>
-                            <span class="font-bold text-indigo-900">${seg.speaker}</span>
-                            <span class="text-sm text-gray-600 italic truncate max-w-md" title="${seg.text_ro}">${seg.text_ro}</span>
-                        </div>
-                        <div class="flex items-center space-x-6 text-sm">
-                            <div class="flex space-x-2">
-                                <label class="text-gray-500">CSV:</label>
-                                <input type="number" step="0.01" class="w-16 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center csv-start" value="${seg.csv_start}">
-                                <span>-</span>
-                                <input type="number" step="0.01" class="w-16 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center csv-end" value="${seg.csv_end}">
-                            </div>
-                            <div class="flex space-x-2">
-                                <label class="text-gray-500">Source:</label>
-                                <input type="number" step="0.01" class="w-16 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center source-start" value="${seg.source_start}">
-                                <span>-</span>
-                                <input type="number" step="0.01" class="w-16 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center source-end" value="${seg.source_end}">
-                            </div>
-                            <div class="flex space-x-2 items-center">
-                                <label class="text-gray-500">Tempo:</label>
-                                <input type="number" step="0.01" min="0.5" max="2.0" class="w-14 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center tempo" value="${seg.tempo || '1.00'}">
-                                <span class="text-xs text-gray-400 mr-2">x</span>
-                                <button onclick="realignFromHere('${seg.speaker}', ${index}, this)" class="text-indigo-600 hover:text-indigo-800 transition-colors" title="Re-align all following segments from this point">
-                                    <i class="fas fa-sync-alt"></i>
-                                </button>
-                            </div>
-                        </div>
+
+                const header = document.createElement('div');
+                header.className = "p-4 bg-gray-50 flex items-center justify-between border-b";
+
+                const leftCol = document.createElement('div');
+                leftCol.className = "flex items-center space-x-4";
+
+                const playBtn = document.createElement('button');
+                playBtn.className = "w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 hover:bg-indigo-600 hover:text-white transition-colors";
+                playBtn.innerHTML = '<i class="fas fa-play"></i>';
+                playBtn.onclick = () => previewSegment(playBtn, seg.speaker, index);
+
+                const speakerSpan = document.createElement('span');
+                speakerSpan.className = "font-bold text-indigo-900";
+                speakerSpan.textContent = seg.speaker;
+
+                const textSpan = document.createElement('span');
+                textSpan.className = "text-sm text-gray-600 italic truncate max-w-md";
+                textSpan.textContent = seg.text_ro;
+                textSpan.title = seg.text_ro;
+
+                leftCol.appendChild(playBtn);
+                leftCol.appendChild(speakerSpan);
+                leftCol.appendChild(textSpan);
+
+                const rightCol = document.createElement('div');
+                rightCol.className = "flex items-center space-x-6 text-sm";
+                rightCol.innerHTML = `
+                    <div class="flex space-x-2">
+                        <label class="text-gray-500">CSV:</label>
+                        <input type="number" step="0.01" class="w-16 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center csv-start" value="${seg.csv_start.toFixed(2)}">
+                        <span>-</span>
+                        <input type="number" step="0.01" class="w-16 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center csv-end" value="${seg.csv_end.toFixed(2)}">
                     </div>
-                    <div class="p-2 relative bg-gray-50/50">
-                        <div id="waveform-${index}" class="w-full h-10"></div>
-                        <div class="absolute bottom-1 right-2 flex space-x-4 text-[11px] font-bold uppercase tracking-wider">
-                           <span class="text-gray-400">Confidence: ${Math.round(seg.confidence * 100)}%</span>
-                           <span class="delta-label"></span>
-                        </div>
+                    <div class="flex space-x-2">
+                        <label class="text-gray-500">Source:</label>
+                        <input type="number" step="0.01" class="w-16 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center source-start" value="${seg.source_start.toFixed(2)}">
+                        <span>-</span>
+                        <input type="number" step="0.01" class="w-16 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center source-end" value="${seg.source_end.toFixed(2)}">
+                    </div>
+                    <div class="flex space-x-2 items-center">
+                        <label class="text-gray-500">Tempo:</label>
+                        <input type="number" step="0.01" min="0.5" max="2.0" class="w-14 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center tempo" value="${(seg.tempo || 1.0).toFixed(2)}">
+                        <span class="text-xs text-gray-400 mr-2">x</span>
                     </div>
                 `;
+
+                const realignBtn = document.createElement('button');
+                realignBtn.className = "text-indigo-600 hover:text-indigo-800 transition-colors";
+                realignBtn.title = "Re-align all following segments from this point";
+                realignBtn.innerHTML = '<i class="fas fa-sync-alt"></i>';
+                realignBtn.onclick = () => realignFromHere(seg.speaker, index, realignBtn);
+                rightCol.querySelector('.items-center').appendChild(realignBtn);
+
+                header.appendChild(leftCol);
+                header.appendChild(rightCol);
+
+                const waveArea = document.createElement('div');
+                waveArea.className = "p-2 relative bg-gray-50/50";
+                waveArea.innerHTML = `
+                    <div id="waveform-${index}" class="w-full h-10"></div>
+                    <div class="absolute bottom-1 right-2 flex space-x-4 text-[11px] font-bold uppercase tracking-wider">
+                       <span class="text-gray-400 confidence-label"></span>
+                       <span class="delta-label"></span>
+                    </div>
+                `;
+                waveArea.querySelector('.confidence-label').textContent = `Confidence: ${Math.round(seg.confidence * 100)}%`;
+
+                block.appendChild(header);
+                block.appendChild(waveArea);
                 list.appendChild(block);
                 initWaveform(index, seg.speaker, seg.source_start, seg.source_end);
             });
@@ -977,6 +1093,14 @@
 
                 // updateView is called with fromInput=true to update region but NOT zoom/scroll
                 updateView(true);
+
+                // Update Project Timeline if it exists and we are NOT already in the middle of a region update
+                if (projectRegions && !isUpdatingFromRegion) {
+                    const region = projectRegions.getRegions().find(r => r.id === `csv-region-${index}`);
+                    if (region && (region.start !== csvS || region.end !== csvE)) {
+                        region.setOptions({ start: csvS, end: csvE });
+                    }
+                }
             }));
 
             // Initial view update
@@ -1141,40 +1265,70 @@
             document.getElementById('step3').classList.add('hidden');
             document.getElementById('resultsSection').classList.remove('hidden');
 
-            let html = '<div class="space-y-3">';
+            resultsDiv.innerHTML = '';
+            const container = document.createElement('div');
+            container.className = 'space-y-3';
 
             data.output_files.forEach(track => {
-                html += `
-                    <div class="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                        <div>
-                            <div class="font-medium">${track.speaker}</div>
-                            <div class="text-sm text-gray-500">${track.duration.toFixed(2)}s • ${(track.size / 1024).toFixed(1)} KB</div>
-                        </div>
-                        <div class="flex space-x-2">
-                            <audio controls src="/api/preview/${track.file}" class="h-10"></audio>
-                            <a href="/api/download/${track.file}" class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700">
-                                <i class="fas fa-download"></i>
-                            </a>
-                        </div>
-                    </div>
-                `;
+                const trackDiv = document.createElement('div');
+                trackDiv.className = 'flex items-center justify-between p-4 bg-gray-50 rounded-lg';
+
+                const infoDiv = document.createElement('div');
+                const nameDiv = document.createElement('div');
+                nameDiv.className = 'font-medium';
+                nameDiv.textContent = track.speaker;
+
+                const statsDiv = document.createElement('div');
+                statsDiv.className = 'text-sm text-gray-500';
+                statsDiv.textContent = `${track.duration.toFixed(2)}s • ${(track.size / 1024).toFixed(1)} KB`;
+
+                infoDiv.appendChild(nameDiv);
+                infoDiv.appendChild(statsDiv);
+
+                const controlsDiv = document.createElement('div');
+                controlsDiv.className = 'flex space-x-2';
+
+                const audio = document.createElement('audio');
+                audio.controls = true;
+                audio.src = `/api/preview/${track.file}`;
+                audio.className = 'h-10';
+
+                const downloadLink = document.createElement('a');
+                downloadLink.href = `/api/download/${track.file}`;
+                downloadLink.className = 'bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700';
+                downloadLink.innerHTML = '<i class="fas fa-download"></i>';
+
+                controlsDiv.appendChild(audio);
+                controlsDiv.appendChild(downloadLink);
+
+                trackDiv.appendChild(infoDiv);
+                trackDiv.appendChild(controlsDiv);
+                container.appendChild(trackDiv);
             });
 
             if (data.zip_file) {
-                html += `
-                    <div class="mt-4 p-4 bg-green-50 rounded-lg">
-                        <div class="flex items-center justify-between">
-                            <span class="font-medium">All Tracks (ZIP)</span>
-                            <a href="/api/download/${data.zip_file}" class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700">
-                                <i class="fas fa-file-archive mr-2"></i>Download All
-                            </a>
-                        </div>
-                    </div>
-                `;
+                const zipDiv = document.createElement('div');
+                zipDiv.className = 'mt-4 p-4 bg-green-50 rounded-lg';
+
+                const innerZip = document.createElement('div');
+                innerZip.className = 'flex items-center justify-between';
+
+                const label = document.createElement('span');
+                label.className = 'font-medium';
+                label.textContent = 'All Tracks (ZIP)';
+
+                const zipLink = document.createElement('a');
+                zipLink.href = `/api/download/${data.zip_file}`;
+                zipLink.className = 'bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700';
+                zipLink.innerHTML = '<i class="fas fa-file-archive mr-2"></i>Download All';
+
+                innerZip.appendChild(label);
+                innerZip.appendChild(zipLink);
+                zipDiv.appendChild(innerZip);
+                container.appendChild(zipDiv);
             }
 
-            html += '</div>';
-            resultsDiv.innerHTML = html;
+            resultsDiv.appendChild(container);
         }
 
         function adjustAllSourceTimes(startDelta, endDelta) {
@@ -1238,7 +1392,7 @@
 
         let isProjectPlaying = false;
         let playbackAbortController = null;
-        let activeProjectAudio = new Map(); // index -> Audio
+        let activeProjectAudio = new Map(); // index -> true (if active in playback)
 
         function stopProjectPlayback() {
             isProjectPlaying = false;
@@ -1253,7 +1407,12 @@
                 if (activeAudio.btn) activeAudio.btn.innerHTML = '<i class="fas fa-play"></i>';
                 activeAudio = null;
             }
-            activeProjectAudio.forEach(a => a.pause());
+
+            // Pause all pooled speaker audio
+            speakerAudioPool.forEach(audio => {
+                audio.pause();
+            });
+
             activeProjectAudio.clear();
 
             document.getElementById('playBtn').innerHTML = '<i class="fas fa-play"></i><span class="text-xs font-bold">Play Project</span>';
@@ -1273,12 +1432,16 @@
         }
 
         async function toggleProjectPlayback() {
+            if (!projectWS) {
+                showToast("Timeline is still loading...", "error");
+                return;
+            }
+
             if (isProjectPlaying) {
                 // Pause
                 isProjectPlaying = false;
                 if (playbackAbortController) playbackAbortController.abort();
-                activeProjectAudio.forEach(a => a.pause());
-                activeProjectAudio.clear();
+                speakerAudioPool.forEach(a => a.pause());
                 document.getElementById('playBtn').innerHTML = '<i class="fas fa-play"></i><span class="text-xs font-bold">Play Project</span>';
             } else {
                 // Play
@@ -1311,14 +1474,15 @@
             const interactionHandler = () => {
                 if (isProjectPlaying) {
                     if (playbackAbortController) playbackAbortController.abort();
-                    activeProjectAudio.forEach(a => a.pause());
-                    activeProjectAudio.clear();
+                    speakerAudioPool.forEach(a => a.pause());
                     playbackAbortController = new AbortController();
                     startPlaybackLoop(playbackAbortController.signal);
                 }
             };
             const unbindInteraction = projectWS.once('interaction', interactionHandler);
             signal.addEventListener('abort', unbindInteraction);
+
+            const speakers = [...new Set(segments.map(s => s.speaker))];
 
             const update = () => {
                 if (signal.aborted || !isProjectPlaying) {
@@ -1335,43 +1499,82 @@
 
                 projectWS.setTime(currentTime);
 
-                segments.forEach(seg => {
-                    const isInside = currentTime >= seg.csv_start && currentTime < seg.csv_end;
-                    const isPlaying = activeProjectAudio.has(seg.index);
+                speakers.forEach(speaker => {
+                    const audio = speakerAudioPool.get(speaker);
+                    if (!audio) return;
 
-                    if (isInside && !isPlaying) {
-                        // Start playing
-                        const url = `/api/original-audio/${currentJobId}/${seg.speaker}`;
-                        const audio = new Audio(url);
-                        audio.playbackRate = seg.tempo;
+                    // Find active segment for this speaker
+                    const activeSeg = segments.find(s => s.speaker === speaker && currentTime >= s.csv_start && currentTime < s.csv_end);
 
-                        // Calculate where to start in the source file
-                        const offsetInCsv = currentTime - seg.csv_start;
-                        audio.currentTime = seg.source_start + (offsetInCsv * seg.tempo);
+                    if (activeSeg) {
+                        const targetAudioTime = activeSeg.source_start + (currentTime - activeSeg.csv_start) * activeSeg.tempo;
 
-                        audio.play().catch(e => console.error("Playback failed", e));
-                        activeProjectAudio.set(seg.index, audio);
+                        audio.playbackRate = activeSeg.tempo;
 
-                        // UI highlight
-                        seg.block.classList.add('bg-indigo-50');
-                        seg.block.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                        seg.btn.innerHTML = '<i class="fas fa-stop"></i>';
-                    } else if (!isInside && isPlaying) {
-                        // Stop playing
-                        const audio = activeProjectAudio.get(seg.index);
-                        audio.pause();
-                        activeProjectAudio.delete(seg.index);
-
-                        // UI reset
-                        seg.block.classList.remove('bg-indigo-50');
-                        seg.btn.innerHTML = '<i class="fas fa-play"></i>';
-                        if (waveforms[seg.index]) waveforms[seg.index].setTime(seg.source_start);
-                    } else if (isInside && isPlaying) {
-                        // Sync local waveform
-                        const audio = activeProjectAudio.get(seg.index);
-                        if (waveforms[seg.index]) {
-                            waveforms[seg.index].setTime(audio.currentTime);
+                        // Sync audio if it's not playing or drift is too large
+                        if (audio.paused || Math.abs(audio.currentTime - targetAudioTime) > 0.15) {
+                            audio.currentTime = targetAudioTime;
+                            audio.play().catch(e => console.warn("Playback prevented", e));
                         }
+
+                        // UI Update for this segment
+                        if (!activeProjectAudio.has(activeSeg.index)) {
+                            // Mark as active
+                            activeProjectAudio.set(activeSeg.index, true);
+                            activeSeg.block.classList.add('bg-indigo-50');
+                            activeSeg.block.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                            activeSeg.btn.innerHTML = '<i class="fas fa-stop"></i>';
+
+                            // Update timeline region style
+                            if (projectRegions) {
+                                const region = projectRegions.getRegions().find(r => r.id === `csv-region-${activeSeg.index}`);
+                                if (region) {
+                                    region.setOptions({
+                                        color: region.color.replace('0.4', '0.7'),
+                                        style: {
+                                            borderRadius: '6px',
+                                            border: '2px solid #4f46e5',
+                                            boxShadow: '0 0 15px rgba(79, 70, 229, 0.4)',
+                                            transition: 'all 0.2s ease'
+                                        }
+                                    });
+                                }
+                            }
+                        }
+
+                        // Sync local waveform
+                        if (waveforms[activeSeg.index]) {
+                            waveforms[activeSeg.index].setTime(audio.currentTime);
+                        }
+                    } else {
+                        // No segment active for this speaker
+                        if (!audio.paused) audio.pause();
+
+                        // Find any segments of this speaker that were marked active and reset them
+                        segments.filter(s => s.speaker === speaker).forEach(s => {
+                            if (activeProjectAudio.has(s.index)) {
+                                activeProjectAudio.delete(s.index);
+                                s.block.classList.remove('bg-indigo-50');
+                                s.btn.innerHTML = '<i class="fas fa-play"></i>';
+                                if (waveforms[s.index]) waveforms[s.index].setTime(s.source_start);
+
+                                // Reset timeline region style
+                                if (projectRegions) {
+                                    const region = projectRegions.getRegions().find(r => r.id === `csv-region-${s.index}`);
+                                    if (region) {
+                                        region.setOptions({
+                                            color: region.color.replace('0.7', '0.4'),
+                                            style: {
+                                                borderRadius: '6px',
+                                                border: '1px solid rgba(0,0,0,0.1)',
+                                                boxShadow: 'none',
+                                                transition: 'all 0.2s ease'
+                                            }
+                                        });
+                                    }
+                                }
+                            }
+                        });
                     }
                 });
 
