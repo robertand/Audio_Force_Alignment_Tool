@@ -377,6 +377,7 @@
         let currentView = 'detailed';
         let projectWS = null;
         let projectRegions = null;
+        let isUpdatingFromTimeline = false;
 
         function toggleView(view) {
             currentView = view;
@@ -428,7 +429,8 @@
             if (!container || !jobAlignmentResults) return;
 
             const maxCsvEnd = jobAlignmentResults.length > 0 ? Math.max(...jobAlignmentResults.map(s => parseFloat(s.csv_end) || 0)) : 0;
-            const duration = Math.max(60, maxCsvEnd + 10);
+            const metadataDuration = currentMetadata && currentMetadata.stats ? currentMetadata.stats.total_duration : 0;
+            const duration = Math.max(metadataDuration, maxCsvEnd);
 
             const pointsPerSec = 100;
             const totalSamples = Math.ceil(duration * pointsPerSec);
@@ -499,9 +501,11 @@
                         jobAlignmentResults[index].csv_end = region.end;
                         const block = document.getElementById(`seg-${index}`);
                         if (block) {
+                            isUpdatingFromTimeline = true;
                             block.querySelector('.csv-start').value = region.start.toFixed(2);
                             block.querySelector('.csv-end').value = region.end.toFixed(2);
                             block.querySelector('.csv-start').dispatchEvent(new Event('input', { bubbles: true }));
+                            isUpdatingFromTimeline = false;
                         }
                     }
                 });
@@ -1095,7 +1099,7 @@
                 updateView(true);
 
                 // Update Project Timeline if it exists and we are NOT already in the middle of a region update
-                if (projectRegions && !isUpdatingFromRegion) {
+                if (projectRegions && !isUpdatingFromRegion && !isUpdatingFromTimeline) {
                     const region = projectRegions.getRegions().find(r => r.id === `csv-region-${index}`);
                     if (region && (region.start !== csvS || region.end !== csvE)) {
                         region.setOptions({ start: csvS, end: csvE });
@@ -1619,7 +1623,9 @@
             const currentAlignments = Array.from(document.querySelectorAll('#segmentList > div')).map(el => ({
                 source_start: parseFloat(el.querySelector('.source-start').value),
                 source_end: parseFloat(el.querySelector('.source-end').value),
-                tempo: parseFloat(el.querySelector('.tempo').value) || 1.0
+                tempo: parseFloat(el.querySelector('.tempo').value) || 1.0,
+                csv_start: parseFloat(el.querySelector('.csv-start').value),
+                csv_end: parseFloat(el.querySelector('.csv-end').value)
             }));
 
             showToast('Re-aligning following segments...', 'info');

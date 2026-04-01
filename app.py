@@ -712,7 +712,9 @@ def realign_segments():
                         job['results'][idx].update({
                             'source_start': adj['source_start'],
                             'source_end': adj['source_end'],
-                            'tempo': adj['tempo']
+                            'tempo': adj['tempo'],
+                            'csv_start': adj.get('csv_start', job['results'][idx]['csv_start']),
+                            'csv_end': adj.get('csv_end', job['results'][idx]['csv_end'])
                         })
 
             # Find all results and their original indices for this speaker
