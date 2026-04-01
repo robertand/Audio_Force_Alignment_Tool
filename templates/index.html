@@ -356,6 +356,65 @@
         }
 
         // Toast notification
+        function updateMiniWaveform(index, container) {
+            const seg = jobAlignmentResults[index];
+            const miniWaveContainer = container || document.getElementById(`mini-wave-${index}`);
+            if (!miniWaveContainer) return;
+
+            const speakerData = speakerWaveforms[seg.speaker];
+            if (!speakerData || !speakerData.peaks) return;
+
+            const srcPeaks = speakerData.peaks;
+            const srcPointsPerSec = srcPeaks.length / speakerData.duration;
+
+            const block = document.getElementById(`seg-${index}`);
+            const sS = block ? parseFloat(block.querySelector('.source-start').value) : parseFloat(seg.source_start);
+            const sE = block ? parseFloat(block.querySelector('.source-end').value) : parseFloat(seg.source_end);
+
+            const startIdx = Math.floor(sS * srcPointsPerSec);
+            const endIdx = Math.ceil(sE * srcPointsPerSec);
+            const segmentPeaks = srcPeaks.slice(startIdx, endIdx);
+
+            if (segmentPeaks.length > 0) {
+                let canvas = miniWaveContainer.querySelector('canvas');
+                if (!canvas) {
+                    canvas = document.createElement('canvas');
+                    canvas.style.width = '100%';
+                    canvas.style.height = '100%';
+                    miniWaveContainer.appendChild(canvas);
+                }
+
+                const draw = () => {
+                    const rect = canvas.getBoundingClientRect();
+                    if (rect.width === 0) return;
+
+                    const dpr = window.devicePixelRatio || 1;
+                    canvas.width = rect.width * dpr;
+                    canvas.height = rect.height * dpr;
+                    const ctx = canvas.getContext('2d');
+                    ctx.scale(dpr, dpr);
+
+                    ctx.clearRect(0, 0, rect.width, rect.height);
+                    ctx.fillStyle = '#1e1b4b';
+                    ctx.globalAlpha = 1.0;
+                    const step = segmentPeaks.length / rect.width;
+                    const amp = rect.height;
+
+                    for (let i = 0; i < rect.width; i++) {
+                        const peak = segmentPeaks[Math.floor(i * step)] || 0;
+                        const h = Math.max(2, peak * amp * 1.5);
+                        ctx.fillRect(i, (amp - h) / 2, 2, h);
+                    }
+                };
+
+                if (container) { // If it's the initial render
+                    setTimeout(draw, 100);
+                } else {
+                    draw();
+                }
+            }
+        }
+
         function showToast(message, type = 'info') {
             const toast = document.getElementById('toast');
             toast.textContent = message;
@@ -380,6 +439,7 @@
         var currentView = 'detailed';
         var projectWS = null;
         var projectRegions = null;
+        var lastRegionState = {};
         var isUpdatingFromTimeline = false;
         var isProjectWSReady = false;
 
@@ -509,26 +569,89 @@
 
                 projectRegions.on('region-updated', (region) => {
                     const index = parseInt(region.id.replace('csv-region-', ''));
-                    if (!isNaN(index) && jobAlignmentResults[index]) {
-                        jobAlignmentResults[index].csv_start = region.start;
-                        jobAlignmentResults[index].csv_end = region.end;
-                        const block = document.getElementById(`seg-${index}`);
-                        if (block) {
-                            isUpdatingFromTimeline = true;
-                            block.querySelector('.csv-start').value = region.start.toFixed(3);
-                            block.querySelector('.csv-end').value = region.end.toFixed(3);
-                            block.querySelector('.csv-start').dispatchEvent(new Event('input', { bubbles: true }));
-                            isUpdatingFromTimeline = false;
+                    if (isNaN(index) || !jobAlignmentResults[index]) return;
+
+                    const seg = jobAlignmentResults[index];
+                    const block = document.getElementById(`seg-${index}`);
+                    if (!block) return;
+
+                    const prevState = lastRegionState[region.id] || { start: seg.csv_start, end: seg.csv_end };
+                    const deltaStart = region.start - prevState.start;
+                    const deltaEnd = region.end - prevState.end;
+                    const tempo = parseFloat(block.querySelector('.tempo').value) || 1.0;
+
+                    if (Math.abs(deltaStart) > 0.0001 || Math.abs(deltaEnd) > 0.0001) {
+                        const prevDur = prevState.end - prevState.start;
+                        const newDur = region.end - region.start;
+
+                        // DAW Logic: Identify if it is a pure MOVE or a RESIZE
+                        // We use a small epsilon for floating point comparison
+                        const isMove = Math.abs(prevDur - newDur) < 0.005;
+
+                        if (isMove) {
+                            // MOVE: Segments content (source_start/end) stays same.
+                            // Only its position in project timeline changes.
+                            seg.csv_start = region.start;
+                            seg.csv_end = region.end;
+                        } else {
+                            // RESIZE (Trimming)
+                            // We use the edge that moved to update source bounds.
+                            // Left handle moved
+                            if (Math.abs(deltaStart) > 0.001) {
+                                const newSourceStart = seg.source_start + deltaStart * tempo;
+                                if (newSourceStart >= 0 && newSourceStart < seg.source_end - 0.05) {
+                                    seg.source_start = newSourceStart;
+                                } else {
+                                    region.setOptions({ start: prevState.start });
+                                }
+                            }
+                            // Right handle moved
+                            if (Math.abs(deltaEnd) > 0.001) {
+                                const newSourceEnd = seg.source_end + deltaEnd * tempo;
+                                const speakerData = speakerWaveforms[seg.speaker];
+                                const maxDur = speakerData ? speakerData.duration : 9999;
+                                if (newSourceEnd <= maxDur && newSourceEnd > seg.source_start + 0.05) {
+                                    seg.source_end = newSourceEnd;
+                                } else {
+                                    region.setOptions({ end: prevState.end });
+                                }
+                            }
+
+                            seg.csv_start = region.start;
+                            seg.csv_end = region.end;
+                        }
+
+                        lastRegionState[region.id] = { start: region.start, end: region.end };
+
+                        // Sync to Detailed View UI
+                        isUpdatingFromTimeline = true;
+                        block.querySelector('.csv-start').value = seg.csv_start.toFixed(3);
+                        block.querySelector('.csv-end').value = seg.csv_end.toFixed(3);
+                        block.querySelector('.source-start').value = seg.source_start.toFixed(3);
+                        block.querySelector('.source-end').value = seg.source_end.toFixed(3);
+
+                        // Explicitly update jobAlignmentResults
+                        jobAlignmentResults[index].csv_start = seg.csv_start;
+                        jobAlignmentResults[index].csv_end = seg.csv_end;
+                        jobAlignmentResults[index].source_start = seg.source_start;
+                        jobAlignmentResults[index].source_end = seg.source_end;
+
+                        // Trigger input event for delta updates (Removed bubbles: true for performance)
+                        block.querySelector('.csv-start').dispatchEvent(new Event('input'));
+                        isUpdatingFromTimeline = false;
+
+                        // Redraw mini-waveform for this region specifically
+                        updateMiniWaveform(index);
+
+                        // Update Detailed Waveform if visible and we are in detailed view
+                        if (currentView === 'detailed' && waveforms[index]) {
+                            waveforms[index].refreshView(true);
                         }
                     }
                 });
 
-                // Update peaks and regions after interaction
+                // Update global peaks after interaction ends
                 projectRegions.on('region-update-end', (region) => {
-                    // Update the block's visual peak state if needed
-                    // We don't want to call load() again if only peaks changed,
-                    // but Wavesurfer 7 doesn't have a simple way to redraw peaks.
-                    // However, for visualization, maybe we only refresh peaks on big changes.
                     renderProjectTimeline();
                 });
 
@@ -633,49 +756,12 @@
                     }
                 });
 
-                // Render Mini-Waveform using Canvas for performance and reliability
-                const speakerData = speakerWaveforms[seg.speaker];
-                if (speakerData && speakerData.peaks) {
-                    const srcPeaks = speakerData.peaks;
-                    const srcPointsPerSec = srcPeaks.length / speakerData.duration;
-
-                    const block = document.getElementById(`seg-${index}`);
-                    const sS = block ? parseFloat(block.querySelector('.source-start').value) : parseFloat(seg.source_start);
-                    const sE = block ? parseFloat(block.querySelector('.source-end').value) : parseFloat(seg.source_end);
-
-                    const startIdx = Math.floor(sS * srcPointsPerSec);
-                    const endIdx = Math.ceil(sE * srcPointsPerSec);
-                    const segmentPeaks = srcPeaks.slice(startIdx, endIdx);
-
-                    if (segmentPeaks.length > 0) {
-                        const canvas = document.createElement('canvas');
-                        canvas.style.width = '100%';
-                        canvas.style.height = '100%';
-                        miniWaveContainer.appendChild(canvas);
-
-                        setTimeout(() => {
-                            const rect = canvas.getBoundingClientRect();
-                            if (rect.width === 0) return;
-
-                            const dpr = window.devicePixelRatio || 1;
-                            canvas.width = rect.width * dpr;
-                            canvas.height = rect.height * dpr;
-                            const ctx = canvas.getContext('2d');
-                            ctx.scale(dpr, dpr);
-
-                            ctx.fillStyle = '#1e1b4b';
-                            ctx.globalAlpha = 1.0;
-                            const step = segmentPeaks.length / rect.width;
-                            const amp = rect.height;
-
-                            for (let i = 0; i < rect.width; i++) {
-                                const peak = segmentPeaks[Math.floor(i * step)] || 0;
-                                const h = Math.max(2, peak * amp * 1.5);
-                                ctx.fillRect(i, (amp - h) / 2, 2, h);
-                            }
-                        }, 100);
-                    }
+                // Initialize/Update last known state for delta calculations
+                if (typeof lastRegionState !== 'undefined') {
+                    lastRegionState[region.id] = { start: cS, end: cE };
                 }
+
+                updateMiniWaveform(index, miniWaveContainer);
             });
         }
 
