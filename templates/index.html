@@ -27,19 +27,22 @@
 
         /* Custom WaveSurfer Regions Styling */
         .wavesurfer-region {
-            border: 2px solid rgba(0,0,0,0.2) !important;
-            border-radius: 4px !important;
+            border: 3px solid rgba(0,0,0,0.4) !important;
+            border-radius: 8px !important;
             pointer-events: auto !important;
             z-index: 100 !important;
+            overflow: hidden !important;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06) !important;
         }
 
         .wavesurfer-region-handle {
-            width: 14px !important;
-            max-width: 14px !important;
+            width: 18px !important;
+            max-width: 18px !important;
             background-color: #ef4444 !important;
             opacity: 1 !important;
-            z-index: 100 !important;
-            border: 1px solid white !important;
+            z-index: 110 !important;
+            border: 2px solid white !important;
+            border-radius: 4px !important;
         }
 
         .wavesurfer-region-handle:hover {
@@ -472,8 +475,8 @@
             if (!projectWS) {
                 projectWS = WaveSurfer.create({
                     container: container,
-                    waveColor: '#4b5563',
-                    progressColor: 'rgba(99, 102, 241, 0.2)',
+                    waveColor: '#e2e8f0', // Lighter waveform for the background
+                    progressColor: 'rgba(99, 102, 241, 0.1)',
                     height: 128,
                     interact: true,
                     cursorWidth: 4,
@@ -556,29 +559,29 @@
                 if (cE <= cS) return;
 
                 const isActive = activeProjectAudio.has(index);
-                const baseColor = speakerColors[seg.speaker];
+                const baseColor = speakerColors[seg.speaker] || 'rgba(156, 163, 175, 0.4)';
                 // Use higher opacity for active segment
-                const regionColor = isActive ? baseColor.replace('0.4', '0.7') : baseColor;
+                const regionColor = isActive ? baseColor.replace('0.4', '0.8') : baseColor;
 
                 const content = document.createElement('div');
-                content.className = "w-full h-full relative p-1 pointer-events-none flex flex-col justify-between";
+                content.className = "w-full h-full relative p-1 pointer-events-none flex flex-col justify-between bg-white/20 rounded shadow-sm overflow-hidden";
 
                 const topRow = document.createElement('div');
                 topRow.className = "flex items-center justify-between";
 
                 const speakerLabel = document.createElement('div');
-                speakerLabel.className = "text-[9px] font-black text-gray-900 leading-none truncate uppercase tracking-tighter";
+                speakerLabel.className = "text-[10px] font-black text-gray-900 leading-none truncate uppercase tracking-tighter";
                 speakerLabel.textContent = seg.speaker;
                 topRow.appendChild(speakerLabel);
 
                 if (isActive) {
                     const volIcon = document.createElement('i');
-                    volIcon.className = "fas fa-volume-up text-[10px] text-indigo-700 animate-pulse";
+                    volIcon.className = "fas fa-volume-up text-[11px] text-indigo-900 animate-pulse";
                     topRow.appendChild(volIcon);
                 }
 
                 const textLabel = document.createElement('div');
-                textLabel.className = "text-[10px] font-medium text-gray-800 leading-tight line-clamp-2 mb-1";
+                textLabel.className = "text-[11px] font-bold text-gray-900 leading-tight line-clamp-2 mb-1";
                 textLabel.textContent = seg.text_ro;
 
                 content.appendChild(topRow);
@@ -593,10 +596,11 @@
                     resize: true,
                     content: content,
                     style: {
-                        borderRadius: '6px',
-                        border: isActive ? '2px solid #4f46e5' : '1px solid rgba(0,0,0,0.1)',
-                        boxShadow: isActive ? '0 0 15px rgba(79, 70, 229, 0.4)' : 'none',
-                        transition: 'all 0.2s ease'
+                        borderRadius: '8px',
+                        border: isActive ? '3px solid #4338ca' : '2px solid rgba(0,0,0,0.2)',
+                        boxShadow: isActive ? '0 0 20px rgba(67, 56, 202, 0.6)' : '0 2px 4px rgba(0,0,0,0.1)',
+                        transition: 'all 0.2s ease',
+                        cursor: 'grab'
                     }
                 });
             });
@@ -1534,11 +1538,11 @@
                                 const region = projectRegions.getRegions().find(r => r.id === `csv-region-${activeSeg.index}`);
                                 if (region) {
                                     region.setOptions({
-                                        color: region.color.replace('0.4', '0.7'),
+                                        color: region.color.replace('0.4', '0.8'),
                                         style: {
-                                            borderRadius: '6px',
-                                            border: '2px solid #4f46e5',
-                                            boxShadow: '0 0 15px rgba(79, 70, 229, 0.4)',
+                                            borderRadius: '8px',
+                                            border: '3px solid #4338ca',
+                                            boxShadow: '0 0 20px rgba(67, 56, 202, 0.6)',
                                             transition: 'all 0.2s ease'
                                         }
                                     });
@@ -1567,11 +1571,11 @@
                                     const region = projectRegions.getRegions().find(r => r.id === `csv-region-${s.index}`);
                                     if (region) {
                                         region.setOptions({
-                                            color: region.color.replace('0.7', '0.4'),
+                                            color: region.color.replace('0.8', '0.4'),
                                             style: {
-                                                borderRadius: '6px',
-                                                border: '1px solid rgba(0,0,0,0.1)',
-                                                boxShadow: 'none',
+                                                borderRadius: '8px',
+                                                border: '2px solid rgba(0,0,0,0.2)',
+                                                boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
                                                 transition: 'all 0.2s ease'
                                             }
                                         });
