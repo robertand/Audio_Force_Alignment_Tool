@@ -402,11 +402,11 @@
                         jobAlignmentResults.forEach((seg, index) => {
                             const block = document.getElementById(`seg-${index}`);
                             if (block) {
-                                block.querySelector('.csv-start').value = seg.csv_start.toFixed(2);
-                                block.querySelector('.csv-end').value = seg.csv_end.toFixed(2);
-                                block.querySelector('.source-start').value = seg.source_start.toFixed(2);
-                                block.querySelector('.source-end').value = seg.source_end.toFixed(2);
-                                block.querySelector('.tempo').value = (seg.tempo || 1.0).toFixed(2);
+                                block.querySelector('.csv-start').value = seg.csv_start.toFixed(3);
+                                block.querySelector('.csv-end').value = seg.csv_end.toFixed(3);
+                                block.querySelector('.source-start').value = seg.source_start.toFixed(3);
+                                block.querySelector('.source-end').value = seg.source_end.toFixed(3);
+                                block.querySelector('.tempo').value = (seg.tempo || 1.0).toFixed(3);
 
                                 // Dispatch input event for delta updates
                                 block.querySelector('.source-start').dispatchEvent(new Event('input', { bubbles: true }));
@@ -440,17 +440,19 @@
             const totalSamples = Math.ceil(duration * pointsPerSec);
             const globalPeaks = new Float32Array(totalSamples * 2);
 
-            jobAlignmentResults.forEach(seg => {
+            jobAlignmentResults.forEach((seg, index) => {
+                // Get latest values from the DOM inputs if they exist, otherwise use result data
+                const block = document.getElementById(`seg-${index}`);
+                const sS = block ? parseFloat(block.querySelector('.source-start').value) : parseFloat(seg.source_start);
+                const sE = block ? parseFloat(block.querySelector('.source-end').value) : parseFloat(seg.source_end);
+                const cS = block ? parseFloat(block.querySelector('.csv-start').value) : parseFloat(seg.csv_start);
+                const tempo = block ? parseFloat(block.querySelector('.tempo').value) : parseFloat(seg.tempo || 1.0);
+
                 const speakerData = speakerWaveforms[seg.speaker];
                 if (!speakerData || !speakerData.peaks) return;
 
                 const srcPeaks = speakerData.peaks;
                 const srcPointsPerSec = srcPeaks.length / speakerData.duration;
-
-                const sS = parseFloat(seg.source_start);
-                const sE = parseFloat(seg.source_end);
-                const cS = parseFloat(seg.csv_start);
-                const tempo = parseFloat(seg.tempo || 1.0);
 
                 let startIdx = Math.floor(sS * srcPointsPerSec);
                 let endIdx = Math.ceil(sE * srcPointsPerSec);
@@ -513,8 +515,8 @@
                         const block = document.getElementById(`seg-${index}`);
                         if (block) {
                             isUpdatingFromTimeline = true;
-                            block.querySelector('.csv-start').value = region.start.toFixed(2);
-                            block.querySelector('.csv-end').value = region.end.toFixed(2);
+                            block.querySelector('.csv-start').value = region.start.toFixed(3);
+                            block.querySelector('.csv-end').value = region.end.toFixed(3);
                             block.querySelector('.csv-start').dispatchEvent(new Event('input', { bubbles: true }));
                             isUpdatingFromTimeline = false;
                         }
@@ -577,17 +579,25 @@
 
                 const isActive = activeProjectAudio.has(index);
                 const baseColor = speakerColors[seg.speaker] || 'rgba(156, 163, 175, 0.4)';
-                // Use higher opacity for active segment
                 const regionColor = isActive ? baseColor.replace('0.4', '0.8') : baseColor;
 
                 const content = document.createElement('div');
-                content.className = "w-full h-full relative p-1 pointer-events-none flex flex-col justify-between bg-white/20 rounded shadow-sm overflow-hidden";
+                content.className = "w-full h-full relative p-1 pointer-events-none flex flex-col justify-between rounded overflow-hidden";
+
+                // Embedded Mini-Waveform Container
+                const miniWaveContainer = document.createElement('div');
+                miniWaveContainer.className = "absolute inset-0 z-0 opacity-100"; // Increased opacity
+                miniWaveContainer.id = `mini-wave-${index}`;
+                content.appendChild(miniWaveContainer);
+
+                const uiOverlay = document.createElement('div');
+                uiOverlay.className = "relative z-10 w-full h-full flex flex-col justify-between";
 
                 const topRow = document.createElement('div');
-                topRow.className = "flex items-center justify-between";
+                topRow.className = "flex items-center justify-between px-1 pt-0.5";
 
                 const speakerLabel = document.createElement('div');
-                speakerLabel.className = "text-[10px] font-black text-gray-900 leading-none truncate uppercase tracking-tighter";
+                speakerLabel.className = "text-[10px] font-black text-gray-900 leading-none truncate uppercase tracking-tighter bg-white/40 px-1 rounded";
                 speakerLabel.textContent = seg.speaker;
                 topRow.appendChild(speakerLabel);
 
@@ -598,13 +608,14 @@
                 }
 
                 const textLabel = document.createElement('div');
-                textLabel.className = "text-[11px] font-bold text-gray-900 leading-tight line-clamp-2 mb-1";
+                textLabel.className = "text-[10px] font-bold text-gray-800 leading-tight line-clamp-2 mb-1 px-1 bg-white/40 rounded";
                 textLabel.textContent = seg.text_ro;
 
-                content.appendChild(topRow);
-                content.appendChild(textLabel);
+                uiOverlay.appendChild(topRow);
+                uiOverlay.appendChild(textLabel);
+                content.appendChild(uiOverlay);
 
-                projectRegions.addRegion({
+                const region = projectRegions.addRegion({
                     id: `csv-region-${index}`,
                     start: cS,
                     end: cE,
@@ -621,6 +632,50 @@
                         cursor: 'grab'
                     }
                 });
+
+                // Render Mini-Waveform using Canvas for performance and reliability
+                const speakerData = speakerWaveforms[seg.speaker];
+                if (speakerData && speakerData.peaks) {
+                    const srcPeaks = speakerData.peaks;
+                    const srcPointsPerSec = srcPeaks.length / speakerData.duration;
+
+                    const block = document.getElementById(`seg-${index}`);
+                    const sS = block ? parseFloat(block.querySelector('.source-start').value) : parseFloat(seg.source_start);
+                    const sE = block ? parseFloat(block.querySelector('.source-end').value) : parseFloat(seg.source_end);
+
+                    const startIdx = Math.floor(sS * srcPointsPerSec);
+                    const endIdx = Math.ceil(sE * srcPointsPerSec);
+                    const segmentPeaks = srcPeaks.slice(startIdx, endIdx);
+
+                    if (segmentPeaks.length > 0) {
+                        const canvas = document.createElement('canvas');
+                        canvas.style.width = '100%';
+                        canvas.style.height = '100%';
+                        miniWaveContainer.appendChild(canvas);
+
+                        setTimeout(() => {
+                            const rect = canvas.getBoundingClientRect();
+                            if (rect.width === 0) return;
+
+                            const dpr = window.devicePixelRatio || 1;
+                            canvas.width = rect.width * dpr;
+                            canvas.height = rect.height * dpr;
+                            const ctx = canvas.getContext('2d');
+                            ctx.scale(dpr, dpr);
+
+                            ctx.fillStyle = '#1e1b4b';
+                            ctx.globalAlpha = 1.0;
+                            const step = segmentPeaks.length / rect.width;
+                            const amp = rect.height;
+
+                            for (let i = 0; i < rect.width; i++) {
+                                const peak = segmentPeaks[Math.floor(i * step)] || 0;
+                                const h = Math.max(2, peak * amp * 1.5);
+                                ctx.fillRect(i, (amp - h) / 2, 2, h);
+                            }
+                        }, 100);
+                    }
+                }
             });
         }
 
@@ -694,7 +749,7 @@
             metadataInfo.querySelector('.filename-label').textContent = data.filename;
             metadataInfo.querySelector('.speaker-count-label').textContent = data.stats.speaker_count;
             metadataInfo.querySelector('.total-segments-label').textContent = data.stats.total_segments;
-            metadataInfo.querySelector('.total-duration-label').textContent = data.stats.total_duration.toFixed(2) + 's';
+            metadataInfo.querySelector('.total-duration-label').textContent = data.stats.total_duration.toFixed(3) + 's';
 
             const slotsDiv = document.getElementById('characterSlots');
             slotsDiv.innerHTML = '';
@@ -927,19 +982,19 @@
                 rightCol.innerHTML = `
                     <div class="flex space-x-2">
                         <label class="text-gray-500">CSV:</label>
-                        <input type="number" step="0.01" class="w-16 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center csv-start" value="${seg.csv_start.toFixed(2)}">
+                        <input type="number" step="0.001" class="w-20 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center csv-start" value="${seg.csv_start.toFixed(3)}">
                         <span>-</span>
-                        <input type="number" step="0.01" class="w-16 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center csv-end" value="${seg.csv_end.toFixed(2)}">
+                        <input type="number" step="0.001" class="w-20 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center csv-end" value="${seg.csv_end.toFixed(3)}">
                     </div>
                     <div class="flex space-x-2">
                         <label class="text-gray-500">Source:</label>
-                        <input type="number" step="0.01" class="w-16 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center source-start" value="${seg.source_start.toFixed(2)}">
+                        <input type="number" step="0.001" class="w-20 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center source-start" value="${seg.source_start.toFixed(3)}">
                         <span>-</span>
-                        <input type="number" step="0.01" class="w-16 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center source-end" value="${seg.source_end.toFixed(2)}">
+                        <input type="number" step="0.001" class="w-20 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center source-end" value="${seg.source_end.toFixed(3)}">
                     </div>
                     <div class="flex space-x-2 items-center">
                         <label class="text-gray-500">Tempo:</label>
-                        <input type="number" step="0.01" min="0.5" max="2.0" class="w-14 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center tempo" value="${(seg.tempo || 1.0).toFixed(2)}">
+                        <input type="number" step="0.001" min="0.5" max="2.0" class="w-16 bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-center tempo" value="${(seg.tempo || 1.0).toFixed(3)}">
                         <span class="text-xs text-gray-400 mr-2">x</span>
                     </div>
                 `;
@@ -993,6 +1048,8 @@
                 url: silentWavData,
                 peaks: [speakerData.peaks],
                 duration: speakerData.duration,
+                fillParent: false,
+                minPxPerSec: 50
             });
 
             // Initialize Regions plugin
@@ -1023,8 +1080,8 @@
                 jobAlignmentResults[index].source_end = region.end;
 
                 // Update inputs
-                startInput.value = region.start.toFixed(2);
-                endInput.value = region.end.toFixed(2);
+                startInput.value = region.start.toFixed(3);
+                endInput.value = region.end.toFixed(3);
 
                 // Trigger input event to update delta label
                 startInput.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1380,14 +1437,14 @@
                     if (startDelta !== 0) {
                         const val = parseFloat(startInput.value);
                         if (!isNaN(val)) {
-                            startInput.value = Math.max(0, val + startDelta).toFixed(2);
+                            startInput.value = Math.max(0, val + startDelta).toFixed(3);
                         }
                     }
 
                     if (endDelta !== 0) {
                         const val = parseFloat(endInput.value);
                         if (!isNaN(val)) {
-                            endInput.value = Math.max(parseFloat(startInput.value) + 0.1, val + endDelta).toFixed(2);
+                            endInput.value = Math.max(parseFloat(startInput.value) + 0.1, val + endDelta).toFixed(3);
                         }
                     }
 
@@ -1399,11 +1456,11 @@
 
                         if (curStartVal < prevEndVal) {
                             // Trim current start to prev end
-                            startInput.value = prevEndVal.toFixed(2);
+                            startInput.value = prevEndVal.toFixed(3);
 
                             // Adjust end if needed
                             if (parseFloat(endInput.value) <= parseFloat(startInput.value)) {
-                                endInput.value = (parseFloat(startInput.value) + 0.1).toFixed(2);
+                                endInput.value = (parseFloat(startInput.value) + 0.1).toFixed(3);
                             }
                         }
                     }

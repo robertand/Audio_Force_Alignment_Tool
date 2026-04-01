@@ -208,30 +208,42 @@ class AlignmentUtils:
             })
         return segments
 
-    def reconstruct_character_track(self, aligned_segments, sr, total_duration=None):
+    def reconstruct_character_track(self, aligned_segments, sr, total_duration=0):
         """
         Place aligned audio segments on a silent track at their target timecodes.
         aligned_segments: list of (target_start, target_end, audio_segment)
         """
-        if not aligned_segments and total_duration is None:
-            return np.array([])
+        # Ensure total_duration is at least enough to cover all segments
+        max_end = max((s[1] for s in aligned_segments), default=0)
+        final_duration = max(total_duration, max_end)
 
-        # Find required total duration
-        if total_duration is None:
-            total_duration = max(s[1] for s in aligned_segments) if aligned_segments else 0
+        if final_duration <= 0:
+            return np.array([], dtype=np.float32)
 
-        full_track = np.zeros(int(total_duration * sr))
+        # Initialize with silence
+        num_samples = int(final_duration * sr)
+        full_track = np.zeros(num_samples, dtype=np.float32)
 
         for target_start, target_end, audio_seg in aligned_segments:
             start_sample = int(target_start * sr)
-            end_sample = start_sample + len(audio_seg)
+
+            # Use actual length of processed audio segment to avoid gaps/overlaps caused by precision
+            num_seg_samples = len(audio_seg)
+            end_sample = start_sample + num_seg_samples
+
+            # Safety check: if start is beyond track, skip
+            if start_sample >= num_samples:
+                continue
 
             # Ensure we don't exceed track length
-            if end_sample > len(full_track):
-                end_sample = len(full_track)
+            if end_sample > num_samples:
+                end_sample = num_samples
                 audio_seg = audio_seg[:end_sample - start_sample]
 
-            # Place audio segment (or use a small crossfade/add to existing)
+            # Place audio segment
+            # Note: We use addition if segments accidentally overlap due to precision,
+            # or direct assignment if they are guaranteed clean.
+            # Reconstruct is usually clean.
             full_track[start_sample:end_sample] = audio_seg
 
         return full_track
