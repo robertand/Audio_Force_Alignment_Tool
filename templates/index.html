@@ -371,16 +371,17 @@
             }, 3000);
         }
 
-        let currentMetadata = null;
-        let currentJobId = null;
-        let jobAlignmentResults = null;
-        let activeAudio = null;
-        let speakerWaveforms = {}; // Cache for speaker waveform peaks
-        let speakerAudioPool = new Map(); // speaker -> Audio object
-        let currentView = 'detailed';
-        let projectWS = null;
-        let projectRegions = null;
-        let isUpdatingFromTimeline = false;
+        var currentMetadata = null;
+        var currentJobId = null;
+        var jobAlignmentResults = null;
+        var activeAudio = null;
+        var speakerWaveforms = {}; // Cache for speaker waveform peaks
+        var speakerAudioPool = new Map(); // speaker -> Audio object
+        var currentView = 'detailed';
+        var projectWS = null;
+        var projectRegions = null;
+        var isUpdatingFromTimeline = false;
+        var isProjectWSReady = false;
 
         function toggleView(view) {
             currentView = view;
@@ -475,7 +476,7 @@
             if (!projectWS) {
                 projectWS = WaveSurfer.create({
                     container: container,
-                    waveColor: '#e2e8f0', // Lighter waveform for the background
+                    waveColor: '#e2e8f0',
                     progressColor: 'rgba(99, 102, 241, 0.1)',
                     height: 128,
                     interact: true,
@@ -491,6 +492,13 @@
                 });
 
                 projectRegions = projectWS.registerPlugin(WaveSurfer.Regions.create());
+                window.projectRegions = projectRegions;
+
+                projectWS.on('ready', () => {
+                    isProjectWSReady = true;
+                    renderProjectTimeline();
+                });
+
                 projectWS.registerPlugin(WaveSurfer.Timeline.create({
                     height: 20,
                     insertPosition: 'beforebegin',
@@ -516,7 +524,10 @@
                 // Update peaks and regions after interaction
                 projectRegions.on('region-update-end', (region) => {
                     // Update the block's visual peak state if needed
-                    setTimeout(renderProjectTimeline, 10);
+                    // We don't want to call load() again if only peaks changed,
+                    // but Wavesurfer 7 doesn't have a simple way to redraw peaks.
+                    // However, for visualization, maybe we only refresh peaks on big changes.
+                    renderProjectTimeline();
                 });
 
                 projectRegions.on('region-clicked', (region, e) => {
@@ -540,8 +551,14 @@
                     zoomSlider.value = projectWS.options.minPxPerSec;
                 }
             } else {
-                projectWS.load("", [globalPeaks], duration);
+                if (Math.abs(projectWS.getDuration() - duration) > 0.1) {
+                    isProjectWSReady = false;
+                    projectWS.load(silentWavData, [globalPeaks], duration);
+                    return;
+                }
             }
+
+            if (!isProjectWSReady) return;
 
             // Clear and re-add regions
             projectRegions.clearRegions();
@@ -595,6 +612,7 @@
                     drag: true,
                     resize: true,
                     content: content,
+                    id: `csv-region-${index}`,
                     style: {
                         borderRadius: '8px',
                         border: isActive ? '3px solid #4338ca' : '2px solid rgba(0,0,0,0.2)',
@@ -1398,9 +1416,13 @@
             showToast(`Adjusted all segments: ${startDelta !== 0 ? 'In ' + (startDelta > 0 ? '+' : '') + startDelta + 's' : ''} ${endDelta !== 0 ? 'Out ' + (endDelta > 0 ? '+' : '') + endDelta + 's' : ''}`, 'success');
         }
 
-        let isProjectPlaying = false;
-        let playbackAbortController = null;
-        let activeProjectAudio = new Map(); // index -> true (if active in playback)
+        var isProjectPlaying = false;
+        var playbackAbortController = null;
+        var activeProjectAudio = new Map(); // index -> true (if active in playback)
+
+        // Exported for verification scripts
+        window.activeProjectAudio = activeProjectAudio;
+        window.speakerAudioPool = speakerAudioPool;
 
         function stopProjectPlayback() {
             isProjectPlaying = false;
@@ -1475,20 +1497,22 @@
                 btn: document.getElementById(`seg-${index}`).querySelector('button')
             }));
 
-            const startTime = performance.now();
-            const startTimelineTime = projectWS.getCurrentTime();
+            var playbackStartTime = performance.now();
+            var playbackStartTimelineTime = projectWS.getCurrentTime();
 
             // Interaction listener to handle seeking while playing
             const interactionHandler = () => {
                 if (isProjectPlaying) {
-                    if (playbackAbortController) playbackAbortController.abort();
+                    // Update start times instead of recursing for better stability
+                    playbackStartTime = performance.now();
+                    playbackStartTimelineTime = projectWS.getCurrentTime();
+
+                    // Pause current pooled audio to force resync in next loop tick
                     speakerAudioPool.forEach(a => a.pause());
-                    playbackAbortController = new AbortController();
-                    startPlaybackLoop(playbackAbortController.signal);
                 }
             };
-            const unbindInteraction = projectWS.once('interaction', interactionHandler);
-            signal.addEventListener('abort', unbindInteraction);
+            const unbindInteraction = projectWS.on('interaction', interactionHandler);
+            signal.addEventListener('abort', () => projectWS.un('interaction', interactionHandler));
 
             const speakers = [...new Set(segments.map(s => s.speaker))];
 
@@ -1497,8 +1521,8 @@
                     return;
                 }
 
-                const elapsed = (performance.now() - startTime) / 1000;
-                const currentTime = startTimelineTime + elapsed;
+                const elapsed = (performance.now() - playbackStartTime) / 1000;
+                const currentTime = playbackStartTimelineTime + elapsed;
 
                 if (currentTime >= projectWS.getDuration()) {
                     stopProjectPlayback();
@@ -1507,22 +1531,42 @@
 
                 projectWS.setTime(currentTime);
 
+                // Use the latest data from jobAlignmentResults which is synced with the UI
+                const currentSegments = jobAlignmentResults.map((seg, index) => {
+                    const block = document.getElementById(`seg-${index}`);
+                    return {
+                        index,
+                        ...seg,
+                        csv_start: parseFloat(block.querySelector('.csv-start').value),
+                        csv_end: parseFloat(block.querySelector('.csv-end').value),
+                        source_start: parseFloat(block.querySelector('.source-start').value),
+                        source_end: parseFloat(block.querySelector('.source-end').value),
+                        tempo: parseFloat(block.querySelector('.tempo').value) || 1.0,
+                        block: block,
+                        btn: block.querySelector('button')
+                    };
+                });
+
                 speakers.forEach(speaker => {
                     const audio = speakerAudioPool.get(speaker);
                     if (!audio) return;
 
                     // Find active segment for this speaker
-                    const activeSeg = segments.find(s => s.speaker === speaker && currentTime >= s.csv_start && currentTime < s.csv_end);
+                    const activeSeg = currentSegments.find(s => s.speaker === speaker && currentTime >= s.csv_start && currentTime < s.csv_end);
 
                     if (activeSeg) {
                         const targetAudioTime = activeSeg.source_start + (currentTime - activeSeg.csv_start) * activeSeg.tempo;
 
-                        audio.playbackRate = activeSeg.tempo;
+                            if (isFinite(activeSeg.tempo) && activeSeg.tempo > 0) {
+                                audio.playbackRate = activeSeg.tempo;
+                            }
 
                         // Sync audio if it's not playing or drift is too large
-                        if (audio.paused || Math.abs(audio.currentTime - targetAudioTime) > 0.15) {
-                            audio.currentTime = targetAudioTime;
-                            audio.play().catch(e => console.warn("Playback prevented", e));
+                            if (isFinite(targetAudioTime)) {
+                                if (audio.paused || Math.abs(audio.currentTime - targetAudioTime) > 0.15) {
+                                    audio.currentTime = targetAudioTime;
+                                    audio.play().catch(e => console.warn("Playback prevented", e));
+                                }
                         }
 
                         // UI Update for this segment
@@ -1559,7 +1603,7 @@
                         if (!audio.paused) audio.pause();
 
                         // Find any segments of this speaker that were marked active and reset them
-                        segments.filter(s => s.speaker === speaker).forEach(s => {
+                        currentSegments.filter(s => s.speaker === speaker).forEach(s => {
                             if (activeProjectAudio.has(s.index)) {
                                 activeProjectAudio.delete(s.index);
                                 s.block.classList.remove('bg-indigo-50');
