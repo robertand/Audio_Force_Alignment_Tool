@@ -361,87 +361,74 @@
             }
         }
 
-        // Toast notification
+        var projectMiniWaveforms = {};
+
         function updateMiniWaveform(index, container, retryCount = 0) {
             const seg = jobAlignmentResults[index];
             const miniWaveContainer = container || document.getElementById(`mini-wave-${index}`);
-            if (!miniWaveContainer) {
-                console.warn(`DAW: mini-wave-${index} not found in DOM`);
-                return;
-            }
+            if (!miniWaveContainer) return;
 
             const speakerData = speakerWaveforms[seg.speaker];
             if (!speakerData || !speakerData.peaks || !projectWS) return;
 
-            const srcPeaks = speakerData.peaks;
-            const srcPointsPerSec = srcPeaks.length / speakerData.duration;
-
             const block = document.getElementById(`seg-${index}`);
             const sS = block ? parseFloat(block.querySelector('.source-start').value) : parseFloat(seg.source_start);
+            const sE = block ? parseFloat(block.querySelector('.source-end').value) : parseFloat(seg.source_end);
             const tempo = block ? parseFloat(block.querySelector('.tempo').value) : parseFloat(seg.tempo || 1.0);
 
             // DAW-style absolute mapping scale
             const minPxPerSec = projectWS.options.minPxPerSec;
 
-            let canvas = miniWaveContainer.querySelector('canvas');
-            if (!canvas) {
-                canvas = document.createElement('canvas');
-                canvas.style.width = '100%';
-                canvas.style.height = '100%';
-                canvas.className = 'absolute inset-0 pointer-events-none z-0';
-                miniWaveContainer.appendChild(canvas);
+            const rectWidth = miniWaveContainer.offsetWidth;
+            if (rectWidth === 0 && retryCount < 10) {
+                setTimeout(() => updateMiniWaveform(index, container, retryCount + 1), 100);
+                return;
             }
 
-            const draw = () => {
-                const rectWidth = miniWaveContainer.offsetWidth;
-                const rectHeight = miniWaveContainer.offsetHeight;
-
-                // Retry if container is not ready
-                if (rectWidth === 0 || rectHeight === 0) {
-                    if (retryCount < 10) {
-                        setTimeout(() => updateMiniWaveform(index, container, retryCount + 1), 100);
-                    }
-                    return;
+            // Always destroy and recreate if container changed or force update
+            if (projectMiniWaveforms[index]) {
+                // If container is different, we must destroy old one
+                if (container && projectMiniWaveforms[index].getWrapper().parentElement !== container) {
+                    projectMiniWaveforms[index].destroy();
+                    delete projectMiniWaveforms[index];
                 }
+            }
 
-                const dpr = window.devicePixelRatio || 1;
-                canvas.width = rectWidth * dpr;
-                canvas.height = rectHeight * dpr;
-                const ctx = canvas.getContext('2d');
-                ctx.scale(dpr, dpr);
+            let ws = projectMiniWaveforms[index];
+            const sColor = (window.speakerColors && window.speakerColors[seg.speaker]) || { border: '#4338ca' };
 
-                ctx.clearRect(0, 0, rectWidth, rectHeight);
+            if (!ws) {
+                ws = WaveSurfer.create({
+                    container: miniWaveContainer,
+                    waveColor: sColor.border,
+                    progressColor: 'transparent',
+                    height: 160,
+                    interact: false,
+                    url: silentWavData,
+                    peaks: [speakerData.peaks],
+                    duration: speakerData.duration,
+                    fillParent: false,
+                    minPxPerSec: minPxPerSec / tempo
+                });
+                projectMiniWaveforms[index] = ws;
+            } else {
+                ws.options.minPxPerSec = minPxPerSec / tempo;
+                ws.zoom(minPxPerSec / tempo);
+            }
 
-                // Draw a subtle background for the waveform area
-                ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-                ctx.fillRect(0, 0, rectWidth, rectHeight);
-
-                // Use speaker color for peaks
-                const sColor = (window.speakerColors && window.speakerColors[seg.speaker]) || { border: '#4338ca' };
-                ctx.fillStyle = sColor.border;
-                ctx.globalAlpha = 1.0;
-
-                const amp = rectHeight * 0.8;
-                const barWidth = 2;
-                const barGap = 1;
-
-                // Pure DAW Reveal Logic:
-                // Horizontal pixel position (i) -> time passed in project timeline
-                // That time is converted to source audio time.
-                for (let i = 0; i < rectWidth; i += (barWidth + barGap)) {
-                    const sourceTime = sS + (i / minPxPerSec * tempo);
-                    const peakIdx = Math.floor(sourceTime * srcPointsPerSec);
-
-                    if (peakIdx >= 0 && peakIdx < srcPeaks.length) {
-                        const peak = Math.abs(srcPeaks[peakIdx] || 0);
-                        const h = Math.max(1.5, peak * amp * 1.5); // Boost visibility
-                        ctx.fillRect(i, (rectHeight - h) / 2, barWidth, h);
-                    }
-                }
+            const syncScroll = () => {
+                const wrapper = ws.getWrapper();
+                if (!wrapper) return;
+                const ratio = wrapper.scrollWidth / speakerData.duration;
+                const scrollPos = sS * ratio;
+                wrapper.scrollLeft = scrollPos;
+                if (wrapper.parentElement) wrapper.parentElement.scrollLeft = scrollPos;
             };
 
-            // Delay draw to ensure miniWaveContainer layout is stable
-            setTimeout(draw, 50);
+            ws.on('ready', syncScroll);
+            ws.on('zoom', syncScroll);
+
+            if (ws.isReady) syncScroll();
         }
 
         function showToast(message, type = 'info') {
@@ -531,6 +518,8 @@
                 if (projectWS) projectWS.destroy();
                 projectWS = null;
                 isProjectWSReady = false;
+                Object.values(projectMiniWaveforms).forEach(ws => ws.destroy());
+                projectMiniWaveforms = {};
             }
 
             if (container.offsetWidth === 0) return;
@@ -703,7 +692,22 @@
             speakers.forEach((s, i) => speakerColors[s] = baseColors[i % baseColors.length]);
             window.speakerColors = speakerColors; // Export for playback loop
 
+            // Clean up old mini-waveforms that are no longer in result set
+            const currentIndices = jobAlignmentResults.map((_, i) => i);
+            Object.keys(projectMiniWaveforms).forEach(idx => {
+                if (!currentIndices.includes(parseInt(idx))) {
+                    projectMiniWaveforms[idx].destroy();
+                    delete projectMiniWaveforms[idx];
+                }
+            });
+
             jobAlignmentResults.forEach((seg, index) => {
+                // Pre-cleanup for this index
+                if (projectMiniWaveforms[index]) {
+                    projectMiniWaveforms[index].destroy();
+                    delete projectMiniWaveforms[index];
+                }
+
                 const cS = parseFloat(seg.csv_start);
                 const cE = parseFloat(seg.csv_end);
 
