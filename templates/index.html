@@ -27,7 +27,7 @@
 
         /* Custom WaveSurfer Regions Styling */
         .wavesurfer-region {
-            border: 3px solid rgba(0,0,0,0.4) !important;
+            border: 2px solid rgba(0,0,0,0.4) !important;
             border-radius: 8px !important;
             pointer-events: auto !important;
             z-index: 100 !important;
@@ -286,7 +286,12 @@
                                 Drag or resize blocks to adjust CSV timing
                             </div>
                         </div>
-                        <div id="timeline-ws-project" class="w-full h-48 bg-gray-50 rounded-lg overflow-hidden border border-gray-200 shadow-inner relative"></div>
+                        <div id="timeline-ws-project" style="min-height: 200px !important;" class="w-full bg-gray-50 rounded-lg overflow-hidden border border-gray-200 shadow-inner relative"></div>
+                        <div class="mt-4 flex justify-end">
+                            <button onclick="renderProjectTimeline(true)" class="text-xs text-indigo-600 hover:text-indigo-800 font-bold uppercase tracking-wider">
+                                <i class="fas fa-sync-alt mr-1"></i> Force Re-render Timeline
+                            </button>
+                        </div>
                     </div>
                 </div>
 
@@ -504,62 +509,76 @@
                 detailedBtn.className = 'px-4 py-1.5 rounded-md text-sm font-bold transition-all text-gray-600 hover:text-indigo-600';
                 detailedView.classList.add('hidden');
                 timelineView.classList.remove('hidden');
-                renderProjectTimeline();
+
+                // DAW Fix: Use a small timeout to guarantee layout recalculation
+                setTimeout(() => {
+                    renderProjectTimeline();
+                }, 50);
             }
         }
 
-        async function renderProjectTimeline() {
+        async function renderProjectTimeline(force = false) {
+            console.log("DAW: renderProjectTimeline execution started");
             const container = document.getElementById('timeline-ws-project');
-            if (!container || !jobAlignmentResults) return;
+            if (!container || !jobAlignmentResults || jobAlignmentResults.length === 0) return;
 
-            const maxCsvEnd = jobAlignmentResults.length > 0 ? Math.max(...jobAlignmentResults.map(s => parseFloat(s.csv_end) || 0)) : 0;
+            if (force) {
+                if (projectWS) projectWS.destroy();
+                projectWS = null;
+                isProjectWSReady = false;
+            }
+
+            if (container.offsetWidth === 0) return;
+
+            const maxCsvEnd = jobAlignmentResults.reduce((max, s) => Math.max(max, parseFloat(s.csv_end) || 0), 0);
             const duration = Math.max(currentMetadata?.stats?.total_duration || 0, maxCsvEnd, 1);
 
+
+
+
             if (!projectWS) {
+                if (container.offsetWidth === 0) {
+                    console.log("DAW: Container width 0");
+                    return;
+                }
                 try {
-                    isProjectLoading = true;
                     projectWS = WaveSurfer.create({
                         container: container,
-                        waveColor: 'rgba(0,0,0,0.03)',
+                        waveColor: '#f1f5f9',
                         progressColor: 'transparent',
-                        height: 128,
+                        height: 160,
                         interact: true,
-                        cursorWidth: 2,
+                        cursorWidth: 3,
                         cursorColor: '#ef4444',
-                        fillParent: false,
-                        minPxPerSec: 10,
+                        fillParent: true,
+                        minPxPerSec: 20,
                         duration: duration
                     });
 
                     projectRegions = projectWS.registerPlugin(WaveSurfer.Regions.create());
                     window.projectRegions = projectRegions;
+                    console.log("DAW: Regions plugin registered");
 
                     projectWS.on('ready', () => {
-                        console.log("DAW-DEBUG: projectWS ready");
                         isProjectWSReady = true;
-                        isProjectLoading = false;
                         renderProjectTimeline();
                     });
 
-                    projectWS.on('error', (e) => {
-                        console.error("DAW-DEBUG: projectWS error", e);
-                        isProjectLoading = false;
-                    });
-
-                    // Force immediate ready if duration is set and url is omitted
-                    projectWS.load(silentWavData, [], duration);
-
                     projectWS.on('zoom', () => {
-                        if (jobAlignmentResults) jobAlignmentResults.forEach((_, idx) => updateMiniWaveform(idx));
+                        jobAlignmentResults.forEach((_, idx) => updateMiniWaveform(idx));
                     });
 
                     projectWS.registerPlugin(WaveSurfer.Timeline.create({
                         height: 20,
                         insertPosition: 'beforebegin',
-                        style: { fontSize: '10px', color: '#475569' },
+                        style: { fontSize: '11px', color: '#1e293b', fontWeight: 'bold' },
                     }));
 
+                    projectWS.load(silentWavData, [new Float32Array([0,0])], duration);
+
+
                     projectRegions.on('region-updated', (region) => {
+                        console.log("DAW-DEBUG: region-updated", region.id);
                         const index = parseInt(region.id.replace('csv-region-', ''));
                         if (isNaN(index) || !jobAlignmentResults[index]) return;
 
@@ -644,19 +663,18 @@
                 }
                 return; // Wait for ready event
             } else {
-                if (!isProjectLoading && Math.abs(projectWS.getDuration() - duration) > 0.5) {
-                    console.log(`DAW-DEBUG: Reloading projectWS for duration change ${projectWS.getDuration()} -> ${duration}`);
-                    isProjectWSReady = false;
-                    isProjectLoading = true;
-                    projectWS.load(silentWavData, [], duration);
-                    return;
+                if (Math.abs(projectWS.getDuration() - duration) > 0.5) {
+                    projectWS.options.duration = duration;
+                    // No need to reload for static peaks mode, just adjust duration if possible
+                    // or re-create if needed. For now, we assume duration is stable.
                 }
             }
 
-            if (isProjectLoading || !isProjectWSReady || !projectRegions) {
-                console.log("DAW-DEBUG: Skipping region render - projectWS busy or not ready");
+            if (!isProjectWSReady || !projectRegions) {
+                console.log("DAW: not ready", { isProjectWSReady, hasPlugin: !!projectRegions });
                 return;
             }
+            console.log("DAW: Drawing regions", jobAlignmentResults.length);
             projectRegions.clearRegions();
             const speakerColors = {};
             const baseColors = [
@@ -670,25 +688,14 @@
                 const cS = parseFloat(seg.csv_start);
                 const cE = parseFloat(seg.csv_end);
 
-                console.log(`DAW-DEBUG: Processing seg ${index} for region`, { cS, cE });
-
-                if (isNaN(cS) || isNaN(cE) || cE <= cS) {
-                    console.log(`DAW-DEBUG: Skipping seg ${index} due to invalid times`);
-                    return;
-                }
-
-                console.log(`DAW-DEBUG: Adding region for seg ${index}`, { cS, cE });
-
+                if (isNaN(cS) || isNaN(cE) || cE <= cS) return;
                 const isActive = activeProjectAudio.has(index);
-                const baseColor = speakerColors[seg.speaker] || 'rgba(156, 163, 175, 0.4)';
-                const regionColor = isActive ? baseColor.replace('0.4', '0.8') : baseColor;
 
                 const content = document.createElement('div');
                 content.className = "w-full h-full relative p-1 pointer-events-none flex flex-col justify-between rounded overflow-hidden";
 
-                // Embedded Mini-Waveform Container
                 const miniWaveContainer = document.createElement('div');
-                miniWaveContainer.className = "absolute inset-0 z-0 opacity-100"; // Increased opacity
+                miniWaveContainer.className = "absolute inset-0 z-0 opacity-100";
                 miniWaveContainer.id = `mini-wave-${index}`;
                 content.appendChild(miniWaveContainer);
 
@@ -721,19 +728,10 @@
                     id: `csv-region-${index}`,
                     start: cS,
                     end: cE,
-                    color: 'transparent', // We use custom background in style
-                    drag: true,
-                    resize: true,
                     content: content,
-                    id: `csv-region-${index}`,
-                    style: {
-                        borderRadius: '8px',
-                        border: isActive ? '3px solid #4338ca' : '2px solid rgba(0,0,0,0.3)',
-                        boxShadow: isActive ? '0 0 20px rgba(67, 56, 202, 0.5)' : '0 2px 6px rgba(0,0,0,0.08)',
-                        transition: 'border 0.1s ease, box-shadow 0.1s ease',
-                        cursor: 'grab',
-                        background: isActive ? 'rgba(99, 102, 241, 0.15)' : 'rgba(255, 255, 255, 0.6)'
-                    }
+                    color: isActive ? 'rgba(99, 102, 241, 0.2)' : 'rgba(255, 255, 255, 0.7)',
+                    drag: true,
+                    resize: true
                 });
 
                 // Initialize/Update last known state for delta calculations
@@ -1624,7 +1622,8 @@
             }));
 
             var playbackStartTime = performance.now();
-            var playbackStartTimelineTime = projectWS.getCurrentTime();
+            // DAW Clock: Independent of projectWS if it's not ready
+            var playbackStartTimelineTime = projectWS ? projectWS.getCurrentTime() : 0;
 
             // Interaction listener to handle seeking while playing
             const interactionHandler = () => {
@@ -1655,7 +1654,7 @@
                     return;
                 }
 
-                projectWS.setTime(currentTime);
+                if (projectWS) projectWS.setTime(currentTime);
 
                 // Use the latest data from jobAlignmentResults which is synced with the UI
                 const currentSegments = jobAlignmentResults.map((seg, index) => {
