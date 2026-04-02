@@ -677,12 +677,18 @@
             console.log("DAW: Drawing regions", jobAlignmentResults.length);
             projectRegions.clearRegions();
             const speakerColors = {};
+            // Distinct vibrant colors for speakers
             const baseColors = [
-                'rgba(99, 102, 241, 0.4)', 'rgba(16, 185, 129, 0.4)', 'rgba(245, 158, 11, 0.4)',
-                'rgba(239, 68, 68, 0.4)', 'rgba(139, 92, 246, 0.4)', 'rgba(236, 72, 153, 0.4)'
+                { name: 'Indigo', bg: 'rgba(99, 102, 241, 0.6)', active: 'rgba(99, 102, 241, 0.85)', border: '#4338ca' },
+                { name: 'Emerald', bg: 'rgba(16, 185, 129, 0.6)', active: 'rgba(16, 185, 129, 0.85)', border: '#059669' },
+                { name: 'Amber', bg: 'rgba(245, 158, 11, 0.6)', active: 'rgba(245, 158, 11, 0.85)', border: '#d97706' },
+                { name: 'Rose', bg: 'rgba(244, 63, 94, 0.6)', active: 'rgba(244, 63, 94, 0.85)', border: '#e11d48' },
+                { name: 'Violet', bg: 'rgba(139, 92, 246, 0.6)', active: 'rgba(139, 92, 246, 0.85)', border: '#7c3aed' },
+                { name: 'Sky', bg: 'rgba(14, 165, 233, 0.6)', active: 'rgba(14, 165, 233, 0.85)', border: '#0284c7' }
             ];
             const speakers = [...new Set(jobAlignmentResults.map(s => s.speaker))];
             speakers.forEach((s, i) => speakerColors[s] = baseColors[i % baseColors.length]);
+            window.speakerColors = speakerColors; // Export for playback loop
 
             jobAlignmentResults.forEach((seg, index) => {
                 const cS = parseFloat(seg.csv_start);
@@ -690,6 +696,7 @@
 
                 if (isNaN(cS) || isNaN(cE) || cE <= cS) return;
                 const isActive = activeProjectAudio.has(index);
+                const sColor = speakerColors[seg.speaker] || baseColors[0];
 
                 const content = document.createElement('div');
                 content.className = "w-full h-full relative p-1 pointer-events-none flex flex-col justify-between rounded overflow-hidden";
@@ -706,7 +713,8 @@
                 topRow.className = "flex items-center justify-between px-1 pt-0.5";
 
                 const speakerLabel = document.createElement('div');
-                speakerLabel.className = "text-[10px] font-black text-white leading-none truncate uppercase tracking-tighter bg-indigo-900/70 px-1.5 py-1 rounded shadow-sm border border-white/20";
+                speakerLabel.className = "text-[11px] font-black text-white leading-none truncate uppercase tracking-tighter px-1.5 py-1 rounded shadow-md border border-white/30";
+                speakerLabel.style.backgroundColor = sColor.border;
                 speakerLabel.textContent = seg.speaker;
                 topRow.appendChild(speakerLabel);
 
@@ -717,8 +725,19 @@
                 }
 
                 const textLabel = document.createElement('div');
-                textLabel.className = "text-[10px] font-bold text-gray-900 leading-tight line-clamp-2 mb-1 px-1.5 py-1 bg-white/80 rounded shadow-sm border border-white/40 backdrop-blur-[1px]";
-                textLabel.textContent = seg.text_ro;
+                textLabel.className = "text-[11px] font-bold text-gray-900 leading-snug mb-1 px-2 py-1.5 bg-white/95 rounded shadow-md border border-white/50 backdrop-blur-[2px] overflow-hidden";
+
+                const roText = document.createElement('div');
+                roText.className = "line-clamp-2";
+                roText.textContent = seg.text_ro;
+                textLabel.appendChild(roText);
+
+                if (seg.text_en && seg.text_en !== seg.text_ro) {
+                    const enText = document.createElement('div');
+                    enText.className = "text-[10px] text-gray-500 italic mt-1 border-t border-gray-100 pt-1 line-clamp-1";
+                    enText.textContent = seg.text_en;
+                    textLabel.appendChild(enText);
+                }
 
                 uiOverlay.appendChild(topRow);
                 uiOverlay.appendChild(textLabel);
@@ -729,9 +748,20 @@
                     start: cS,
                     end: cE,
                     content: content,
-                    color: isActive ? 'rgba(99, 102, 241, 0.2)' : 'rgba(255, 255, 255, 0.7)',
+                    color: 'transparent', // Using style for more control
                     drag: true,
                     resize: true
+                });
+
+                // Apply initial style
+                region.setOptions({
+                    style: {
+                        borderRadius: '8px',
+                        border: isActive ? `3px solid ${sColor.border}` : `2px solid rgba(0,0,0,0.3)`,
+                        boxShadow: isActive ? `0 0 20px ${sColor.bg}` : `0 2px 6px rgba(0,0,0,0.1)`,
+                        background: isActive ? sColor.active : sColor.bg,
+                        transition: 'all 0.15s ease'
+                    }
                 });
 
                 // Initialize/Update last known state for delta calculations
@@ -1706,14 +1736,14 @@
                             if (projectRegions) {
                                 const region = projectRegions.getRegions().find(r => r.id === `csv-region-${activeSeg.index}`);
                                 if (region) {
+                                    const sColor = (window.speakerColors && window.speakerColors[activeSeg.speaker]) || { bg: 'rgba(99, 102, 241, 0.5)', active: 'rgba(99, 102, 241, 0.8)', border: '#4338ca' };
                                     region.setOptions({
-                                        color: 'transparent',
                                         style: {
                                             borderRadius: '8px',
-                                            border: '3px solid #4338ca',
-                                            boxShadow: '0 0 20px rgba(67, 56, 202, 0.5)',
+                                            border: `3px solid ${sColor.border}`,
+                                            boxShadow: `0 0 20px ${sColor.bg}`,
                                             transition: 'border 0.1s ease, box-shadow 0.1s ease',
-                                            background: 'rgba(99, 102, 241, 0.15)'
+                                            background: sColor.active
                                         }
                                     });
                                 }
@@ -1740,14 +1770,14 @@
                                 if (projectRegions) {
                                     const region = projectRegions.getRegions().find(r => r.id === `csv-region-${s.index}`);
                                     if (region) {
+                                        const sColor = (window.speakerColors && window.speakerColors[s.speaker]) || { bg: 'rgba(0,0,0,0.1)', border: 'rgba(0,0,0,0.3)' };
                                         region.setOptions({
-                                        color: 'transparent',
                                             style: {
                                                 borderRadius: '8px',
-                                            border: '2px solid rgba(0,0,0,0.3)',
-                                            boxShadow: '0 2px 6px rgba(0,0,0,0.08)',
-                                            transition: 'border 0.1s ease, box-shadow 0.1s ease',
-                                            background: 'rgba(255, 255, 255, 0.6)'
+                                                border: '2px solid rgba(0,0,0,0.3)',
+                                                boxShadow: '0 2px 6px rgba(0,0,0,0.08)',
+                                                transition: 'all 0.2s ease',
+                                                background: sColor.bg
                                             }
                                         });
                                     }
