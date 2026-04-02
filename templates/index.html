@@ -31,18 +31,21 @@
             border-radius: 8px !important;
             pointer-events: auto !important;
             z-index: 100 !important;
-            overflow: hidden !important;
+            /* overflow: hidden !important; */ /* Allow handles to be visible */
             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06) !important;
         }
 
         .wavesurfer-region-handle {
-            width: 18px !important;
-            max-width: 18px !important;
+            width: 12px !important; /* Standard width but clearly visible */
+            max-width: 12px !important;
             background-color: #ef4444 !important;
             opacity: 1 !important;
-            z-index: 110 !important;
+            z-index: 2000 !important; /* Extremely high z-index */
             border: 2px solid white !important;
             border-radius: 4px !important;
+            cursor: col-resize !important;
+            pointer-events: auto !important;
+            margin: 0 -6px !important; /* Overlap the edge for better hit area */
         }
 
         .wavesurfer-region-handle:hover {
@@ -716,7 +719,7 @@
                 const sColor = speakerColors[seg.speaker] || baseColors[0];
 
                 const content = document.createElement('div');
-                content.className = "w-full h-full relative p-1 pointer-events-none flex flex-col justify-between rounded overflow-hidden";
+                content.className = "w-full h-full relative p-0 pointer-events-none flex flex-col justify-between rounded overflow-hidden";
 
                 const miniWaveContainer = document.createElement('div');
                 miniWaveContainer.className = "absolute inset-0 z-0 opacity-100";
@@ -1342,20 +1345,26 @@
                 const ws = waveforms[index];
                 const duration = (end - start) / tempo;
 
+                const checkEnd = setInterval(() => {
+                    if (activeAudio === audio && !audio.paused) {
+                        ws.setTime(audio.currentTime);
+                        if (audio.currentTime >= end) {
+                            audio.pause();
+                            btn.innerHTML = '<i class="fas fa-play"></i>';
+                            activeAudio = null;
+                            ws.setTime(start);
+                            clearInterval(checkEnd);
+                        }
+                    } else {
+                        clearInterval(checkEnd);
+                    }
+                }, 20);
+
                 audio.ontimeupdate = () => {
                     if (activeAudio === audio && !audio.paused) {
                         ws.setTime(audio.currentTime);
                     }
                 };
-
-                setTimeout(() => {
-                    if (activeAudio === audio) {
-                        audio.pause();
-                        btn.innerHTML = '<i class="fas fa-play"></i>';
-                        activeAudio = null;
-                        ws.setTime(start);
-                    }
-                }, duration * 1000);
             });
 
             audio.addEventListener('ended', () => {
@@ -1743,6 +1752,16 @@
 
                         // UI Update for this segment
                         if (!activeProjectAudio.has(activeSeg.index)) {
+                            // Ensure no other segments for this speaker are marked as active
+                            currentSegments.filter(s => s.speaker === speaker && s.index !== activeSeg.index).forEach(s => {
+                                if (activeProjectAudio.has(s.index)) {
+                                    activeProjectAudio.delete(s.index);
+                                    s.block.classList.remove('bg-indigo-50');
+                                    s.btn.innerHTML = '<i class="fas fa-play"></i>';
+                                    if (waveforms[s.index]) waveforms[s.index].setTime(s.source_start);
+                                }
+                            });
+
                             // Mark as active
                             activeProjectAudio.set(activeSeg.index, true);
                             activeSeg.block.classList.add('bg-indigo-50');
