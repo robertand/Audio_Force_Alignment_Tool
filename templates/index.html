@@ -362,10 +362,13 @@
         }
 
         // Toast notification
-        function updateMiniWaveform(index, container) {
+        function updateMiniWaveform(index, container, retryCount = 0) {
             const seg = jobAlignmentResults[index];
             const miniWaveContainer = container || document.getElementById(`mini-wave-${index}`);
-            if (!miniWaveContainer) return;
+            if (!miniWaveContainer) {
+                console.warn(`DAW: mini-wave-${index} not found in DOM`);
+                return;
+            }
 
             const speakerData = speakerWaveforms[seg.speaker];
             if (!speakerData || !speakerData.peaks || !projectWS) return;
@@ -392,7 +395,14 @@
             const draw = () => {
                 const rectWidth = miniWaveContainer.offsetWidth;
                 const rectHeight = miniWaveContainer.offsetHeight;
-                if (rectWidth === 0) return;
+
+                // Retry if container is not ready
+                if (rectWidth === 0 || rectHeight === 0) {
+                    if (retryCount < 10) {
+                        setTimeout(() => updateMiniWaveform(index, container, retryCount + 1), 100);
+                    }
+                    return;
+                }
 
                 const dpr = window.devicePixelRatio || 1;
                 canvas.width = rectWidth * dpr;
@@ -402,18 +412,16 @@
 
                 ctx.clearRect(0, 0, rectWidth, rectHeight);
 
-                // Draw a subtle center line
-                ctx.strokeStyle = 'rgba(67, 56, 202, 0.1)';
-                ctx.lineWidth = 1;
-                ctx.beginPath();
-                ctx.moveTo(0, rectHeight / 2);
-                ctx.lineTo(rectWidth, rectHeight / 2);
-                ctx.stroke();
+                // Draw a subtle background for the waveform area
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+                ctx.fillRect(0, 0, rectWidth, rectHeight);
 
-                ctx.fillStyle = '#4338ca'; // Indigo 700
-                ctx.globalAlpha = 0.85;
+                // Use speaker color for peaks
+                const sColor = (window.speakerColors && window.speakerColors[seg.speaker]) || { border: '#4338ca' };
+                ctx.fillStyle = sColor.border;
+                ctx.globalAlpha = 1.0;
 
-                const amp = rectHeight * 0.85;
+                const amp = rectHeight * 0.8;
                 const barWidth = 2;
                 const barGap = 1;
 
@@ -426,17 +434,14 @@
 
                     if (peakIdx >= 0 && peakIdx < srcPeaks.length) {
                         const peak = Math.abs(srcPeaks[peakIdx] || 0);
-                        const h = Math.max(1.5, peak * amp * 1.3);
+                        const h = Math.max(1.5, peak * amp * 1.5); // Boost visibility
                         ctx.fillRect(i, (rectHeight - h) / 2, barWidth, h);
                     }
                 }
             };
 
-            if (container) {
-                setTimeout(draw, 50);
-            } else {
-                requestAnimationFrame(draw);
-            }
+            // Delay draw to ensure miniWaveContainer layout is stable
+            setTimeout(draw, 50);
         }
 
         function showToast(message, type = 'info') {
@@ -639,6 +644,14 @@
                         }
                     });
 
+                    // Update waveform when interaction starts to ensure visual continuity
+                    projectRegions.on('region-clicked', (region, e) => {
+                        const index = parseInt(region.id.replace('csv-region-', ''));
+                        if (!isNaN(index)) {
+                            updateMiniWaveform(index);
+                        }
+                    });
+
                     projectRegions.on('region-clicked', (region, e) => {
                         e.stopPropagation();
                         const index = parseInt(region.id.replace('csv-region-', ''));
@@ -725,7 +738,7 @@
                 }
 
                 const textLabel = document.createElement('div');
-                textLabel.className = "text-[11px] font-bold text-gray-900 leading-snug mb-1 px-2 py-1.5 bg-white/95 rounded shadow-md border border-white/50 backdrop-blur-[2px] overflow-hidden";
+                textLabel.className = "text-[10px] font-bold text-gray-900 leading-tight mb-0.5 px-1.5 py-1 bg-white/90 rounded shadow-sm border border-white/40 backdrop-blur-[1px] overflow-hidden";
 
                 const roText = document.createElement('div');
                 roText.className = "line-clamp-2";
