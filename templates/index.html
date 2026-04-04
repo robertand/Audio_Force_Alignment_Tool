@@ -36,16 +36,17 @@
         }
 
         .wavesurfer-region-handle {
-            width: 12px !important; /* Standard width but clearly visible */
-            max-width: 12px !important;
+            width: 18px !important;
+            max-width: 18px !important;
             background-color: #ef4444 !important;
             opacity: 1 !important;
-            z-index: 2000 !important; /* Extremely high z-index */
+            z-index: 1000 !important;
             border: 2px solid white !important;
             border-radius: 4px !important;
             cursor: col-resize !important;
             pointer-events: auto !important;
-            margin: 0 -6px !important; /* Overlap the edge for better hit area */
+            height: 100% !important;
+            top: 0 !important;
         }
 
         .wavesurfer-region-handle:hover {
@@ -53,12 +54,19 @@
             cursor: col-resize;
         }
 
+        .wavesurfer-region-handle-left {
+            left: -9px !important;
+        }
+        .wavesurfer-region-handle-right {
+            right: -9px !important;
+        }
+
         .wavesurfer-region-handle-left::before {
             content: 'IN';
             position: absolute;
-            top: 0;
+            top: 50%;
             left: 50%;
-            transform: translateX(-50%);
+            transform: translate(-50%, -50%) rotate(-90deg);
             font-size: 8px;
             font-weight: 900;
             color: white;
@@ -69,9 +77,9 @@
         .wavesurfer-region-handle-right::before {
             content: 'OUT';
             position: absolute;
-            bottom: 0;
+            top: 50%;
             left: 50%;
-            transform: translateX(-50%);
+            transform: translate(-50%, -50%) rotate(-90deg);
             font-size: 8px;
             font-weight: 900;
             color: white;
@@ -458,7 +466,7 @@
         var currentView = 'detailed';
         var projectWS = null;
         var projectRegions = null;
-        var lastRegionState = {};
+        window.lastRegionState = {};
         var isUpdatingFromTimeline = false;
         var isProjectWSReady = false;
         var isProjectLoading = false;
@@ -575,7 +583,8 @@
 
 
                     projectRegions.on('region-updated', (region) => {
-                        console.log("DAW-DEBUG: region-updated", region.id);
+                        if (isUpdatingFromTimeline) return;
+
                         const index = parseInt(region.id.replace('csv-region-', ''));
                         if (isNaN(index) || !jobAlignmentResults[index]) return;
 
@@ -583,53 +592,47 @@
                         const block = document.getElementById(`seg-${index}`);
                         if (!block) return;
 
-                        const prevState = lastRegionState[region.id] || { start: seg.csv_start, end: seg.csv_end };
-                        const deltaStart = region.start - prevState.start;
-                        const deltaEnd = region.end - prevState.end;
+                        const prevState = window.lastRegionState[region.id] || { start: seg.csv_start, end: seg.csv_end };
+                        const dS = region.start - prevState.start;
+                        const dE = region.end - prevState.end;
                         const tempo = parseFloat(block.querySelector('.tempo').value) || 1.0;
 
-                        if (Math.abs(deltaStart) > 0.0001 || Math.abs(deltaEnd) > 0.0001) {
+                        if (Math.abs(dS) > 0.0001 || Math.abs(dE) > 0.0001) {
                             const prevDur = prevState.end - prevState.start;
-                            const newDur = region.end - region.start;
-                            const isMove = Math.abs(prevDur - newDur) < 0.005;
+                            const isMove = Math.abs((region.end - region.start) - prevDur) < 0.005;
+
+                            isUpdatingFromTimeline = true;
 
                             if (isMove) {
                                 seg.csv_start = region.start;
                                 seg.csv_end = region.end;
                             } else {
-                                if (Math.abs(deltaStart) > 0.001) {
-                                    const newSourceStart = seg.source_start + deltaStart * tempo;
-                                    if (newSourceStart >= 0 && newSourceStart < seg.source_end - 0.05) {
-                                        seg.source_start = newSourceStart;
-                                    } else {
-                                        region.setOptions({ start: prevState.start });
-                                    }
+                                if (Math.abs(dS) > 0.001) {
+                                    const newSS = seg.source_start + dS * tempo;
+                                    if (newSS >= 0 && newSS < seg.source_end - 0.05) {
+                                        seg.source_start = newSS;
+                                    } else region.setOptions({ start: prevState.start });
                                 }
-                                if (Math.abs(deltaEnd) > 0.001) {
-                                    const newSourceEnd = seg.source_end + deltaEnd * tempo;
-                                    const speakerData = speakerWaveforms[seg.speaker];
-                                    const maxDur = speakerData ? speakerData.duration : 9999;
-                                    if (newSourceEnd <= maxDur && newSourceEnd > seg.source_start + 0.05) {
-                                        seg.source_end = newSourceEnd;
-                                    } else {
-                                        region.setOptions({ end: prevState.end });
-                                    }
+                                if (Math.abs(dE) > 0.001) {
+                                    const newSE = seg.source_end + dE * tempo;
+                                    const sData = speakerWaveforms[seg.speaker];
+                                    if (newSE <= (sData ? sData.duration : 9999) && newSE > seg.source_start + 0.05) {
+                                        seg.source_end = newSE;
+                                    } else region.setOptions({ end: prevState.end });
                                 }
                                 seg.csv_start = region.start;
                                 seg.csv_end = region.end;
                             }
 
-                            lastRegionState[region.id] = { start: region.start, end: region.end };
-                            isUpdatingFromTimeline = true;
+                            window.lastRegionState[region.id] = { start: seg.csv_start, end: seg.csv_end };
+
+                            // Update primary block UI and trigger view refreshes
                             block.querySelector('.csv-start').value = seg.csv_start.toFixed(3);
                             block.querySelector('.csv-end').value = seg.csv_end.toFixed(3);
                             block.querySelector('.source-start').value = seg.source_start.toFixed(3);
                             block.querySelector('.source-end').value = seg.source_end.toFixed(3);
-                            jobAlignmentResults[index].csv_start = seg.csv_start;
-                            jobAlignmentResults[index].csv_end = seg.csv_end;
-                            jobAlignmentResults[index].source_start = seg.source_start;
-                            jobAlignmentResults[index].source_end = seg.source_end;
-                            block.querySelector('.csv-start').dispatchEvent(new Event('input'));
+                            block.querySelector('.csv-start').dispatchEvent(new Event('input', { bubbles: true }));
+
                             isUpdatingFromTimeline = false;
                             updateMiniWaveform(index);
                             if (currentView === 'detailed' && waveforms[index]) waveforms[index].refreshView(true);
@@ -662,6 +665,16 @@
                         zoomSlider.addEventListener('input', (e) => projectWS.zoom(parseFloat(e.target.value)));
                         zoomSlider.value = projectWS.options.minPxPerSec;
                     }
+
+                    // Mouse Wheel Zoom
+                    container.addEventListener('wheel', (e) => {
+                        if (e.ctrlKey || e.metaKey || e.altKey) return; // Allow normal scroll with modifiers
+                        e.preventDefault();
+                        const delta = e.deltaY > 0 ? -2 : 2;
+                        const newZoom = Math.min(100, Math.max(1, projectWS.options.minPxPerSec + delta));
+                        projectWS.zoom(newZoom);
+                        if (zoomSlider) zoomSlider.value = newZoom;
+                    }, { passive: false });
                 } catch (e) {
                     console.error("DAW-DEBUG: projectWS initialization failed", e);
                     return;
@@ -719,15 +732,16 @@
                 const sColor = speakerColors[seg.speaker] || baseColors[0];
 
                 const content = document.createElement('div');
+                // Ensure content itself does not intercept clicks meant for the region/handles
                 content.className = "w-full h-full relative p-0 pointer-events-none flex flex-col justify-between rounded overflow-hidden";
 
                 const miniWaveContainer = document.createElement('div');
-                miniWaveContainer.className = "absolute inset-0 z-0 opacity-100";
+                miniWaveContainer.className = "absolute inset-0 z-0 opacity-100 pointer-events-none";
                 miniWaveContainer.id = `mini-wave-${index}`;
                 content.appendChild(miniWaveContainer);
 
                 const uiOverlay = document.createElement('div');
-                uiOverlay.className = "relative z-10 w-full h-full flex flex-col justify-between";
+                uiOverlay.className = "relative z-10 w-full h-full flex flex-col justify-between pointer-events-none";
 
                 const topRow = document.createElement('div');
                 topRow.className = "flex items-center justify-between px-1 pt-0.5";
@@ -785,9 +799,7 @@
                 });
 
                 // Initialize/Update last known state for delta calculations
-                if (typeof lastRegionState !== 'undefined') {
-                    lastRegionState[region.id] = { start: cS, end: cE };
-                }
+                window.lastRegionState[region.id] = { start: cS, end: cE };
 
                 updateMiniWaveform(index, miniWaveContainer);
             });
@@ -1278,11 +1290,22 @@
             };
 
             inputs.forEach(input => input.addEventListener('input', (e) => {
-                const s = parseFloat(block.querySelector('.source-start').value);
-                const eVal = parseFloat(block.querySelector('.source-end').value);
-                const csvS = parseFloat(block.querySelector('.csv-start').value);
-                const csvE = parseFloat(block.querySelector('.csv-end').value);
-                const tempo = parseFloat(block.querySelector('.tempo').value) || 1.0;
+                let s = parseFloat(block.querySelector('.source-start').value);
+                let eVal = parseFloat(block.querySelector('.source-end').value);
+                let csvS = parseFloat(block.querySelector('.csv-start').value);
+                let csvE = parseFloat(block.querySelector('.csv-end').value);
+                let tempo = parseFloat(block.querySelector('.tempo').value) || 1.0;
+
+                // Logic: If Source In/Out or Tempo changed, update CSV End to match duration
+                const isSourceOrTempoChange = e.target.classList.contains('source-start') ||
+                                             e.target.classList.contains('source-end') ||
+                                             e.target.classList.contains('tempo');
+
+                if (isSourceOrTempoChange && !isNaN(s) && !isNaN(eVal) && !isNaN(tempo)) {
+                    const newDur = (eVal - s) / tempo;
+                    csvE = csvS + newDur;
+                    block.querySelector('.csv-end').value = csvE.toFixed(3);
+                }
 
                 // Sync back to jobAlignmentResults
                 if (!isNaN(s)) jobAlignmentResults[index].source_start = s;
@@ -1294,11 +1317,13 @@
                 // updateView is called with fromInput=true to update region but NOT zoom/scroll
                 updateView(true);
 
-                // Update Project Timeline if it exists and we are NOT already in the middle of a region update
-                if (projectRegions && !isUpdatingFromRegion && !isUpdatingFromTimeline) {
-                    const region = projectRegions.getRegions().find(r => r.id === `csv-region-${index}`);
-                    if (region && (region.start !== csvS || region.end !== csvE)) {
-                        region.setOptions({ start: csvS, end: csvE });
+                // Update Project Timeline if it exists and we are NOT already in the middle of a Project Timeline update
+                if (projectRegions && !isUpdatingFromTimeline) {
+                    const r = projectRegions.getRegions().find(reg => reg.id === `csv-region-${index}`);
+                    if (r && (Math.abs(r.start - csvS) > 0.001 || Math.abs(r.end - csvE) > 0.001)) {
+                        r.setOptions({ start: csvS, end: csvE });
+                        window.lastRegionState[r.id] = { start: csvS, end: csvE };
+                        updateMiniWaveform(index);
                     }
                 }
             }));
