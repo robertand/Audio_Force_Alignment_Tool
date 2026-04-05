@@ -31,34 +31,38 @@
             border-radius: 8px !important;
             pointer-events: auto !important;
             z-index: 100 !important;
-            /* overflow: hidden !important; */ /* Allow handles to be visible */
             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06) !important;
+            cursor: grab !important;
         }
 
         .wavesurfer-region-handle {
-            width: 18px !important;
-            max-width: 18px !important;
-            background-color: #ef4444 !important;
+            width: 24px !important;
+            max-width: 24px !important;
+            background-color: rgba(239, 68, 68, 0.7) !important;
             opacity: 1 !important;
-            z-index: 1000 !important;
-            border: 2px solid white !important;
-            border-radius: 4px !important;
+            z-index: 2000 !important;
+            border: none !important;
             cursor: col-resize !important;
             pointer-events: auto !important;
             height: 100% !important;
             top: 0 !important;
+            transition: background-color 0.2s ease !important;
         }
 
         .wavesurfer-region-handle:hover {
-            background-color: #dc2626 !important;
-            cursor: col-resize;
+            background-color: rgba(239, 68, 68, 1) !important;
+            box-shadow: inset 0 0 10px rgba(255,255,255,0.5) !important;
         }
 
         .wavesurfer-region-handle-left {
-            left: -9px !important;
+            left: 0 !important;
+            border-right: 2px solid rgba(255,255,255,0.4) !important;
+            border-radius: 6px 0 0 6px !important;
         }
         .wavesurfer-region-handle-right {
-            right: -9px !important;
+            right: 0 !important;
+            border-left: 2px solid rgba(255,255,255,0.4) !important;
+            border-radius: 0 6px 6px 0 !important;
         }
 
         .wavesurfer-region-handle-left::before {
@@ -67,11 +71,12 @@
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%) rotate(-90deg);
-            font-size: 8px;
+            font-size: 10px;
             font-weight: 900;
             color: white;
             pointer-events: none;
             white-space: nowrap;
+            letter-spacing: 1px;
         }
 
         .wavesurfer-region-handle-right::before {
@@ -80,11 +85,12 @@
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%) rotate(-90deg);
-            font-size: 8px;
+            font-size: 10px;
             font-weight: 900;
             color: white;
             pointer-events: none;
             white-space: nowrap;
+            letter-spacing: 1px;
         }
     </style>
 </head>
@@ -733,7 +739,7 @@
 
                 const content = document.createElement('div');
                 // Ensure content itself does not intercept clicks meant for the region/handles
-                content.className = "w-full h-full relative p-0 pointer-events-none flex flex-col justify-between rounded overflow-hidden";
+                content.className = "w-full h-full relative p-0 pointer-events-none flex flex-col justify-between rounded";
 
                 const miniWaveContainer = document.createElement('div');
                 miniWaveContainer.className = "absolute inset-0 z-0 opacity-100 pointer-events-none";
