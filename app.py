@@ -621,9 +621,10 @@ def get_original_audio(job_id, speaker):
         if not job:
             return jsonify({'error': 'Job not found'}), 404
         
-        # Find audio file for speaker
+        # Find audio file for speaker (using sanitized speaker name as stored in filename)
+        safe_speaker = secure_filename(speaker)
         for file_info in job.get('files', []):
-            if speaker in file_info.get('path', ''):
+            if safe_speaker in file_info.get('path', ''):
                 return send_file(file_info['path'], mimetype='audio/wav')
         
         return jsonify({'error': 'Speaker audio not found'}), 404
@@ -637,8 +638,9 @@ def get_waveform_data(job_id, speaker):
             return jsonify({'error': 'Job not found'}), 404
 
         audio_path = None
+        safe_speaker = secure_filename(speaker)
         for file_info in job.get('files', []):
-            if speaker in file_info.get('path', ''):
+            if safe_speaker in file_info.get('path', ''):
                 audio_path = file_info.get('path')
                 break
 

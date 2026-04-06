@@ -26,68 +26,80 @@
         }
 
         /* Custom WaveSurfer Regions Styling */
-        .wavesurfer-region {
+        /* WaveSurfer v7 Shadow DOM Styling */
+        #timeline-ws-project ::part(region) {
             border: 2px solid rgba(0,0,0,0.4) !important;
             border-radius: 8px !important;
-            pointer-events: auto !important;
-            z-index: 100 !important;
             box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1) !important;
-            cursor: default !important; /* Base region is default */
+            cursor: default !important;
             overflow: visible !important;
+            z-index: 100 !important;
         }
 
-        /* The Grab Area (Center of the region) */
-        .wavesurfer-region::before {
-            content: '● ● ●';
-            display: flex;
-            align-items: flex-start;
-            justify-content: center;
-            padding-top: 4px;
-            color: rgba(255,255,255,0.4);
-            font-size: 8px;
+        /* Grab Area - We use a div inside the region (content) for this to be safer */
+        .grab-zone {
             position: absolute;
             top: 0;
-            left: 32px;
-            right: 32px;
+            left: 35px;
+            right: 35px;
             bottom: 0;
             cursor: grab !important;
-            z-index: 1;
+            z-index: 50; /* Above mini-wave but below handles if possible */
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start;
+            align-items: center;
+            padding-top: 2px;
+            color: rgba(0,0,0,0.3);
+            font-size: 8px;
+            pointer-events: auto !important;
+            background-color: rgba(255,255,255,0.05); /* Slight tint for grab area */
         }
-        .wavesurfer-region:active::before {
-            cursor: grabbing !important;
+        .grab-zone:hover {
+            background-color: rgba(255,255,255,0.15);
+            color: rgba(0,0,0,0.6);
         }
+        .grab-zone:active { cursor: grabbing !important; }
 
-        .wavesurfer-region-handle {
-            width: 32px !important;
-            max-width: 32px !important;
+        #timeline-ws-project ::part(region-handle) {
+            width: 35px !important;
             background-color: rgba(239, 68, 68, 0.4) !important;
-            opacity: 1 !important;
             z-index: 2000 !important;
-            border: none !important;
             cursor: col-resize !important;
             pointer-events: auto !important;
-            height: 100% !important;
-            top: 0 !important;
             transition: all 0.2s ease !important;
+            opacity: 1 !important;
         }
 
-        .wavesurfer-region-handle:hover {
+        #timeline-ws-project ::part(region-handle):hover {
             background-color: rgba(239, 68, 68, 0.9) !important;
-            width: 36px !important;
+            width: 40px !important;
         }
 
-        .wavesurfer-region-handle-left {
+        #timeline-ws-project ::part(region-handle-left) {
             left: 0 !important;
             border-right: 4px solid white !important;
             border-radius: 6px 0 0 6px !important;
         }
-        .wavesurfer-region-handle-right {
+
+        #timeline-ws-project ::part(region-handle-right) {
             right: 0 !important;
             border-left: 4px solid white !important;
             border-radius: 0 6px 6px 0 !important;
         }
 
-        .wavesurfer-region-handle-left::before {
+        /* Custom WaveSurfer Regions Fallback (for older/alternate versions) */
+        .wavesurfer-region {
+            cursor: default !important;
+        }
+        .wavesurfer-region-handle {
+            width: 35px !important;
+            background-color: rgba(239, 68, 68, 0.4) !important;
+            z-index: 2000 !important;
+            pointer-events: auto !important;
+        }
+
+        #timeline-ws-project ::part(region-handle-left)::before {
             content: 'IN';
             position: absolute;
             top: 50%;
@@ -770,6 +782,11 @@
 
                 const uiOverlay = document.createElement('div');
                 uiOverlay.className = "relative z-10 w-full h-full flex flex-col justify-between pointer-events-none";
+
+                const grabZone = document.createElement('div');
+                grabZone.className = "grab-zone";
+                grabZone.innerHTML = '<span class="uppercase tracking-widest font-black opacity-30 mt-1">MOVE</span><span class="mt-0.5">● ● ●</span>';
+                content.appendChild(grabZone);
 
                 const topRow = document.createElement('div');
                 topRow.className = "flex items-center justify-between px-1 pt-0.5";
