@@ -623,17 +623,45 @@
                                 seg.csv_end = region.end;
                             } else {
                                 if (Math.abs(dS) > 0.001) {
-                                    const newSS = seg.source_start + dS * tempo;
-                                    if (newSS >= 0 && newSS < seg.source_end - 0.05) {
+                                    // REVEAL LOGIC: Discovery from minus.
+                                    // If we drag the IN handle to the left (dS < 0), we reveal earlier audio (source_start decreases).
+                                    // If we drag it to the right (dS > 0), we trim/hide audio (source_start increases).
+                                    // Formula: newSourceStart = oldSourceStart + (deltaCsv * tempo)
+                                    let newSS = seg.source_start + (dS * tempo);
+
+                                    const minSS = 0;
+                                    if (newSS < minSS) {
+                                        // Snap to start of audio file
+                                        const allowedDelta = (minSS - seg.source_start) / tempo;
+                                        region.setOptions({ start: prevState.start + allowedDelta });
+                                        newSS = minSS;
+                                    }
+
+                                    if (newSS < seg.source_end - 0.05) {
                                         seg.source_start = newSS;
-                                    } else region.setOptions({ start: prevState.start });
+                                    } else {
+                                        // Prevent crossing over end
+                                        region.setOptions({ start: prevState.start });
+                                    }
                                 }
                                 if (Math.abs(dE) > 0.001) {
-                                    const newSE = seg.source_end + dE * tempo;
+                                    let newSE = seg.source_end + (dE * tempo);
                                     const sData = speakerWaveforms[seg.speaker];
-                                    if (newSE <= (sData ? sData.duration : 9999) && newSE > seg.source_start + 0.05) {
+                                    const maxSE = sData ? sData.duration : 9999;
+
+                                    if (newSE > maxSE) {
+                                        // Snap to end of audio file
+                                        const allowedDelta = (maxSE - seg.source_end) / tempo;
+                                        region.setOptions({ end: prevState.end + allowedDelta });
+                                        newSE = maxSE;
+                                    }
+
+                                    if (newSE > seg.source_start + 0.05) {
                                         seg.source_end = newSE;
-                                    } else region.setOptions({ end: prevState.end });
+                                    } else {
+                                        // Prevent crossing over start
+                                        region.setOptions({ end: prevState.end });
+                                    }
                                 }
                                 seg.csv_start = region.start;
                                 seg.csv_end = region.end;
@@ -681,14 +709,28 @@
                         zoomSlider.value = projectWS.options.minPxPerSec;
                     }
 
-                    // Mouse Wheel Zoom
+                    // Mouse Wheel Zoom at Cursor
                     container.addEventListener('wheel', (e) => {
-                        if (e.ctrlKey || e.metaKey || e.altKey) return; // Allow normal scroll with modifiers
+                        if (e.ctrlKey || e.metaKey || e.altKey) return;
                         e.preventDefault();
+
+                        const rect = container.getBoundingClientRect();
+                        const pointerX = e.clientX - rect.left;
+                        const scrollX = projectWS.getScroll();
+                        const containerWidth = container.clientWidth;
+
+                        // Current time at cursor position
+                        const pointerTime = (scrollX + pointerX) / projectWS.options.minPxPerSec;
+
                         const delta = e.deltaY > 0 ? -2 : 2;
                         const newZoom = Math.min(100, Math.max(1, projectWS.options.minPxPerSec + delta));
+
                         projectWS.zoom(newZoom);
                         if (zoomSlider) zoomSlider.value = newZoom;
+
+                        // After zoom, calculate new scroll to keep pointerTime at pointerX
+                        const newScrollX = pointerTime * newZoom - pointerX;
+                        projectWS.setScroll(newScrollX);
                     }, { passive: false });
                 } catch (e) {
                     console.error("DAW-DEBUG: projectWS initialization failed", e);
