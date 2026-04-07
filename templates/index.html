@@ -40,8 +40,8 @@
         .grab-zone {
             position: absolute;
             top: 0;
-            left: 35px;
-            right: 35px;
+            left: 2px;
+            right: 2px;
             bottom: 0;
             cursor: grab !important;
             z-index: 50; /* Above mini-wave but below handles if possible */
@@ -62,8 +62,8 @@
         .grab-zone:active { cursor: grabbing !important; }
 
         #timeline-ws-project ::part(region-handle) {
-            width: 20px !important;
-            background-color: rgba(239, 68, 68, 0.35) !important;
+            width: 2px !important;
+            background-color: #ef4444 !important;
             z-index: 2147483647 !important;
             cursor: col-resize !important;
             pointer-events: auto !important;
@@ -72,20 +72,18 @@
         }
 
         #timeline-ws-project ::part(region-handle):hover {
-            background-color: rgba(239, 68, 68, 0.85) !important;
-            width: 24px !important;
+            background-color: #dc2626 !important;
+            width: 6px !important;
         }
 
         #timeline-ws-project ::part(region-handle-left) {
             left: 0 !important;
-            border-right: 2px solid white !important;
-            border-radius: 4px 0 0 4px !important;
+            border-radius: 2px 0 0 2px !important;
         }
 
         #timeline-ws-project ::part(region-handle-right) {
             right: 0 !important;
-            border-left: 2px solid white !important;
-            border-radius: 0 4px 4px 0 !important;
+            border-radius: 0 2px 2px 0 !important;
         }
 
         /* Custom WaveSurfer Regions Fallback (for older/alternate versions) */
@@ -93,38 +91,15 @@
             cursor: default !important;
         }
         .wavesurfer-region-handle {
-            width: 20px !important;
-            background-color: rgba(239, 68, 68, 0.35) !important;
+            width: 2px !important;
+            background-color: #ef4444 !important;
             z-index: 2147483647 !important;
             pointer-events: auto !important;
         }
 
-        #timeline-ws-project ::part(region-handle-left)::before {
-            content: 'IN';
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%) rotate(-90deg);
-            font-size: 10px;
-            font-weight: 900;
-            color: white;
-            pointer-events: none;
-            white-space: nowrap;
-            letter-spacing: 1px;
-        }
-
+        #timeline-ws-project ::part(region-handle-left)::before,
         .wavesurfer-region-handle-right::before {
-            content: 'OUT';
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%) rotate(-90deg);
-            font-size: 10px;
-            font-weight: 900;
-            color: white;
-            pointer-events: none;
-            white-space: nowrap;
-            letter-spacing: 1px;
+            display: none !important;
         }
     </style>
 </head>
