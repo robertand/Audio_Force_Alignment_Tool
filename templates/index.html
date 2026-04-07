@@ -62,9 +62,9 @@
         .grab-zone:active { cursor: grabbing !important; }
 
         #timeline-ws-project ::part(region-handle) {
-            width: 35px !important;
-            background-color: rgba(239, 68, 68, 0.4) !important;
-            z-index: 2000 !important;
+            width: 20px !important;
+            background-color: rgba(239, 68, 68, 0.35) !important;
+            z-index: 2147483647 !important;
             cursor: col-resize !important;
             pointer-events: auto !important;
             transition: all 0.2s ease !important;
@@ -72,20 +72,20 @@
         }
 
         #timeline-ws-project ::part(region-handle):hover {
-            background-color: rgba(239, 68, 68, 0.9) !important;
-            width: 40px !important;
+            background-color: rgba(239, 68, 68, 0.85) !important;
+            width: 24px !important;
         }
 
         #timeline-ws-project ::part(region-handle-left) {
             left: 0 !important;
-            border-right: 4px solid white !important;
-            border-radius: 6px 0 0 6px !important;
+            border-right: 2px solid white !important;
+            border-radius: 4px 0 0 4px !important;
         }
 
         #timeline-ws-project ::part(region-handle-right) {
             right: 0 !important;
-            border-left: 4px solid white !important;
-            border-radius: 0 6px 6px 0 !important;
+            border-left: 2px solid white !important;
+            border-radius: 0 4px 4px 0 !important;
         }
 
         /* Custom WaveSurfer Regions Fallback (for older/alternate versions) */
@@ -93,9 +93,9 @@
             cursor: default !important;
         }
         .wavesurfer-region-handle {
-            width: 35px !important;
-            background-color: rgba(239, 68, 68, 0.4) !important;
-            z-index: 2000 !important;
+            width: 20px !important;
+            background-color: rgba(239, 68, 68, 0.35) !important;
+            z-index: 2147483647 !important;
             pointer-events: auto !important;
         }
 
