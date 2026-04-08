@@ -36,54 +36,99 @@
             z-index: 100 !important;
         }
 
-        /* Grab Area - We use a div inside the region (content) for this to be safer */
+        /* Grab Area - Precise interaction zone */
         .grab-zone {
             position: absolute;
-            top: 0;
-            left: 2px;
-            right: 2px;
+            top: 20px; /* Leave space for labels */
+            left: 40px; /* Leave space for handles */
+            right: 40px;
             bottom: 0;
             cursor: grab !important;
-            z-index: 50; /* Above mini-wave but below handles if possible */
+            z-index: 50;
             display: flex;
-            flex-direction: column;
-            justify-content: flex-start;
+            justify-content: center;
             align-items: center;
-            padding-top: 2px;
-            color: rgba(0,0,0,0.3);
-            font-size: 8px;
+            color: rgba(0,0,0,0.15);
+            font-size: 9px;
+            font-weight: 900;
             pointer-events: auto !important;
-            background-color: rgba(255,255,255,0.05); /* Slight tint for grab area */
+            background-color: rgba(255,255,255,0.01);
+            transition: all 0.2s;
+            border-radius: 4px;
+            letter-spacing: 0.2em;
         }
         .grab-zone:hover {
-            background-color: rgba(255,255,255,0.15);
+            background-color: rgba(255,255,255,0.25);
             color: rgba(0,0,0,0.6);
         }
         .grab-zone:active { cursor: grabbing !important; }
 
         #timeline-ws-project ::part(region-handle) {
-            width: 2px !important;
-            background-color: #ef4444 !important;
+            width: 40px !important; /* Larger interactive area */
+            background-color: transparent !important;
             z-index: 2147483647 !important;
             cursor: col-resize !important;
             pointer-events: auto !important;
-            transition: all 0.2s ease !important;
-            opacity: 1 !important;
+            display: flex !important;
+            flex-direction: column !important;
+            justify-content: center !important;
+            align-items: center !important;
         }
 
-        #timeline-ws-project ::part(region-handle):hover {
-            background-color: #dc2626 !important;
-            width: 6px !important;
+        #timeline-ws-project ::part(region-handle)::after {
+            content: "";
+            width: 2px;
+            height: 100%;
+            background-color: #ef4444;
+            transition: all 0.2s ease;
+            box-shadow: 0 0 5px rgba(239, 68, 68, 0.5);
+        }
+
+        #timeline-ws-project ::part(region-handle):hover::after {
+            width: 6px;
+            background-color: #dc2626;
         }
 
         #timeline-ws-project ::part(region-handle-left) {
             left: 0 !important;
-            border-radius: 2px 0 0 2px !important;
+            justify-content: flex-start !important;
+        }
+
+        #timeline-ws-project ::part(region-handle-left)::before {
+            content: "IN";
+            font-size: 8px;
+            font-weight: 900;
+            color: white;
+            background: #ef4444;
+            padding: 1px 3px;
+            border-radius: 2px;
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            pointer-events: none;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+            z-index: 200;
         }
 
         #timeline-ws-project ::part(region-handle-right) {
             right: 0 !important;
-            border-radius: 0 2px 2px 0 !important;
+            justify-content: flex-end !important;
+        }
+
+        #timeline-ws-project ::part(region-handle-right)::before {
+            content: "OUT";
+            font-size: 8px;
+            font-weight: 900;
+            color: white;
+            background: #ef4444;
+            padding: 1px 3px;
+            border-radius: 2px;
+            position: absolute;
+            top: 2px;
+            right: 2px;
+            pointer-events: none;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+            z-index: 200;
         }
 
         /* Custom WaveSurfer Regions Fallback (for older/alternate versions) */
@@ -391,41 +436,60 @@
 
         function updateMiniWaveform(index, container, retryCount = 0) {
             const seg = jobAlignmentResults[index];
-            const miniWaveContainer = container || document.getElementById(`mini-wave-${index}`);
-            if (!miniWaveContainer) return;
+            const targetContainer = container || document.getElementById(`mini-wave-${index}`);
+            if (!targetContainer) return;
 
             const speakerData = speakerWaveforms[seg.speaker];
             if (!speakerData || !speakerData.peaks || !projectWS) return;
 
-            const block = document.getElementById(`seg-${index}`);
-            const sS = block ? parseFloat(block.querySelector('.source-start').value) : parseFloat(seg.source_start);
-            const sE = block ? parseFloat(block.querySelector('.source-end').value) : parseFloat(seg.source_end);
-            const tempo = block ? parseFloat(block.querySelector('.tempo').value) : parseFloat(seg.tempo || 1.0);
+            // Use data model directly for reliability during rapid timeline updates
+            const sS = parseFloat(seg.source_start);
+            const tempo = parseFloat(seg.tempo || 1.0);
 
-            // DAW-style absolute mapping scale
-            const minPxPerSec = projectWS.options.minPxPerSec;
+            // WaveSurfer v7: actual px/sec from main timeline
+            const currentPxPerSec = projectWS.options.minPxPerSec;
 
-            const rectWidth = miniWaveContainer.offsetWidth;
-            if (rectWidth === 0 && retryCount < 10) {
+            if (targetContainer.offsetWidth === 0 && retryCount < 10) {
                 setTimeout(() => updateMiniWaveform(index, container, retryCount + 1), 100);
                 return;
             }
 
-            // Always destroy and recreate if container changed or force update
-            if (projectMiniWaveforms[index]) {
-                // If container is different, we must destroy old one
-                if (container && projectMiniWaveforms[index].getWrapper().parentElement !== container) {
-                    projectMiniWaveforms[index].destroy();
-                    delete projectMiniWaveforms[index];
-                }
+            const pxPerSec = currentPxPerSec / tempo;
+            const totalWidth = speakerData.duration * pxPerSec;
+            const offset = -(sS * pxPerSec);
+
+            // Robust transformation strategy:
+            // 1. targetContainer is the CLIPPER (absolute inset-0)
+            // 2. We need a WAVE_HOLDER inside it that is transformed.
+            let waveHolder = targetContainer.querySelector('.wave-holder');
+            if (!waveHolder) {
+                waveHolder = document.createElement('div');
+                waveHolder.className = 'wave-holder';
+                waveHolder.style.position = 'absolute';
+                waveHolder.style.left = '0';
+                waveHolder.style.top = '0';
+                waveHolder.style.height = '100%';
+                waveHolder.style.pointerEvents = 'none';
+                targetContainer.appendChild(waveHolder);
             }
 
+            waveHolder.style.width = totalWidth + 'px';
+            waveHolder.style.transform = `translate3d(${offset}px, 0, 0)`;
+
             let ws = projectMiniWaveforms[index];
+
+            // If the WaveSurfer instance exists but its container is no longer in the DOM or is different, destroy it
+            if (ws && (!ws.getWrapper() || ws.getWrapper().parentElement !== waveHolder)) {
+                ws.destroy();
+                ws = null;
+                delete projectMiniWaveforms[index];
+            }
+
             const sColor = (window.speakerColors && window.speakerColors[seg.speaker]) || { border: '#4338ca' };
 
             if (!ws) {
                 ws = WaveSurfer.create({
-                    container: miniWaveContainer,
+                    container: waveHolder,
                     waveColor: sColor.border,
                     progressColor: 'transparent',
                     height: 160,
@@ -433,35 +497,13 @@
                     url: silentWavData,
                     peaks: [speakerData.peaks],
                     duration: speakerData.duration,
-                    fillParent: false,
-                    minPxPerSec: minPxPerSec / tempo
+                    fillParent: true,
+                    minPxPerSec: 0
                 });
                 projectMiniWaveforms[index] = ws;
             } else {
-                ws.options.minPxPerSec = minPxPerSec / tempo;
-                ws.zoom(minPxPerSec / tempo);
+                // WaveSurfer fits automatically if width changed
             }
-
-            const syncScroll = () => {
-                const wrapper = ws.getWrapper();
-                if (!wrapper || !wrapper.parentElement) return;
-
-                // Content pinning: The waveform inside the region must be offset
-                // so that the absolute source_start time (sS) aligns with the left edge of the region.
-                // Formula: offset = -(source_start * pxPerSec)
-                const pxPerSec = minPxPerSec / tempo;
-                const offset = -(sS * pxPerSec);
-
-                // Apply visual offset using transform for zero-latency pinning during dragging
-                wrapper.style.transform = `translateX(${offset}px)`;
-                wrapper.style.width = `${speakerData.duration * pxPerSec}px`;
-                wrapper.parentElement.style.overflow = 'visible'; // Allow clipping by miniWaveContainer
-            };
-
-            ws.on('ready', syncScroll);
-            ws.on('zoom', syncScroll);
-
-            if (ws.isReady) syncScroll();
         }
 
         function showToast(message, type = 'info') {
@@ -577,9 +619,11 @@
                         interact: true,
                         cursorWidth: 3,
                         cursorColor: '#ef4444',
-                        fillParent: true,
+                        fillParent: false,
                         minPxPerSec: 20,
-                        duration: duration
+                        duration: duration,
+                        autoCenter: false,
+                        autoScroll: false
                     });
 
                     projectRegions = projectWS.registerPlugin(WaveSurfer.Regions.create());
@@ -629,7 +673,7 @@
                                 seg.csv_start = region.start;
                                 seg.csv_end = region.end;
                             } else {
-                                if (Math.abs(dS) > 0.001) {
+                                if (Math.abs(dS) > 0.0001) {
                                     // REVEAL LOGIC: Discovery from minus.
                                     // If we drag the IN handle to the left (dS < 0), we reveal earlier audio (source_start decreases).
                                     // If we drag it to the right (dS > 0), we trim/hide audio (source_start increases).
@@ -651,7 +695,7 @@
                                         region.setOptions({ start: prevState.start });
                                     }
                                 }
-                                if (Math.abs(dE) > 0.001) {
+                                if (Math.abs(dE) > 0.0001) {
                                     let newSE = seg.source_end + (dE * tempo);
                                     const sData = speakerWaveforms[seg.speaker];
                                     const maxSE = sData ? sData.duration : 9999;
@@ -674,7 +718,7 @@
                                 seg.csv_end = region.end;
                             }
 
-                            window.lastRegionState[region.id] = { start: seg.csv_start, end: seg.csv_end };
+                            window.lastRegionState[region.id] = { start: region.start, end: region.end };
 
                             // Update primary block UI and trigger view refreshes
                             block.querySelector('.csv-start').value = seg.csv_start.toFixed(3);
@@ -786,12 +830,7 @@
             });
 
             jobAlignmentResults.forEach((seg, index) => {
-                // Pre-cleanup for this index
-                if (projectMiniWaveforms[index]) {
-                    projectMiniWaveforms[index].destroy();
-                    delete projectMiniWaveforms[index];
-                }
-
+                // Reuse existing waveform if possible to reduce flickering
                 const cS = parseFloat(seg.csv_start);
                 const cE = parseFloat(seg.csv_end);
 
@@ -804,7 +843,7 @@
                 content.className = "w-full h-full relative p-0 pointer-events-none flex flex-col justify-between rounded";
 
                 const miniWaveContainer = document.createElement('div');
-                miniWaveContainer.className = "absolute inset-0 z-0 opacity-100 pointer-events-none overflow-hidden";
+                miniWaveContainer.className = "absolute inset-0 z-0 opacity-100 pointer-events-none overflow-hidden rounded";
                 miniWaveContainer.id = `mini-wave-${index}`;
                 content.appendChild(miniWaveContainer);
 
@@ -813,7 +852,7 @@
 
                 const grabZone = document.createElement('div');
                 grabZone.className = "grab-zone";
-                grabZone.innerHTML = '<span class="uppercase tracking-widest font-black opacity-30 mt-1">MOVE</span><span class="mt-0.5">● ● ●</span>';
+                grabZone.innerHTML = 'MOVE';
                 content.appendChild(grabZone);
 
                 const topRow = document.createElement('div');
