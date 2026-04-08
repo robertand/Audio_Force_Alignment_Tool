@@ -444,11 +444,18 @@
 
             const syncScroll = () => {
                 const wrapper = ws.getWrapper();
-                if (!wrapper) return;
-                const ratio = wrapper.scrollWidth / speakerData.duration;
-                const scrollPos = sS * ratio;
-                wrapper.scrollLeft = scrollPos;
-                if (wrapper.parentElement) wrapper.parentElement.scrollLeft = scrollPos;
+                if (!wrapper || !wrapper.parentElement) return;
+
+                // Content pinning: The waveform inside the region must be offset
+                // so that the absolute source_start time (sS) aligns with the left edge of the region.
+                // Formula: offset = -(source_start * pxPerSec)
+                const pxPerSec = minPxPerSec / tempo;
+                const offset = -(sS * pxPerSec);
+
+                // Apply visual offset using transform for zero-latency pinning during dragging
+                wrapper.style.transform = `translateX(${offset}px)`;
+                wrapper.style.width = `${speakerData.duration * pxPerSec}px`;
+                wrapper.parentElement.style.overflow = 'visible'; // Allow clipping by miniWaveContainer
             };
 
             ws.on('ready', syncScroll);
@@ -730,7 +737,11 @@
 
                         // After zoom, calculate new scroll to keep pointerTime at pointerX
                         const newScrollX = pointerTime * newZoom - pointerX;
-                        projectWS.setScroll(newScrollX);
+
+                        // Use requestAnimationFrame for smooth scroll follow during zoom
+                        requestAnimationFrame(() => {
+                           projectWS.setScroll(newScrollX);
+                        });
                     }, { passive: false });
                 } catch (e) {
                     console.error("DAW-DEBUG: projectWS initialization failed", e);
@@ -793,7 +804,7 @@
                 content.className = "w-full h-full relative p-0 pointer-events-none flex flex-col justify-between rounded";
 
                 const miniWaveContainer = document.createElement('div');
-                miniWaveContainer.className = "absolute inset-0 z-0 opacity-100 pointer-events-none";
+                miniWaveContainer.className = "absolute inset-0 z-0 opacity-100 pointer-events-none overflow-hidden";
                 miniWaveContainer.id = `mini-wave-${index}`;
                 content.appendChild(miniWaveContainer);
 
