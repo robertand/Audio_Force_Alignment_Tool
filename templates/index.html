@@ -28,34 +28,43 @@
         /* Custom WaveSurfer Regions Styling */
         /* WaveSurfer v7 Shadow DOM Styling */
         #timeline-ws-project ::part(region) {
-            border: 2px solid rgba(0,0,0,0.4) !important;
-            border-radius: 8px !important;
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1) !important;
+            border: 2px solid rgba(0,0,0,0.5) !important;
+            border-radius: 4px !important;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1) !important;
             cursor: default !important;
             overflow: visible !important;
             z-index: 100 !important;
+            pointer-events: none !important;
+        }
+
+        /* Container for the mini-waveform to ensure it respects parent rounding and clipping */
+        .mini-wave-clipper {
+            position: absolute;
+            inset: 0;
+            overflow: hidden !important; /* CRITICAL: Clips waveform to segment box */
+            border-radius: 4px;
+            z-index: 0;
+            pointer-events: none;
+            background: rgba(0,0,0,0.05);
         }
 
         /* Grab Area - Precise interaction zone */
         .grab-zone {
             position: absolute;
-            top: 20px; /* Leave space for labels */
-            left: 40px; /* Leave space for handles */
-            right: 40px;
-            bottom: 0;
+            inset: 0;
+            top: 20px; /* Space for labels */
             cursor: grab !important;
-            z-index: 50;
+            z-index: 40;
             display: flex;
             justify-content: center;
             align-items: center;
-            color: rgba(0,0,0,0.15);
-            font-size: 9px;
+            color: rgba(0,0,0,0.2);
+            font-size: 8px;
             font-weight: 900;
             pointer-events: auto !important;
-            background-color: rgba(255,255,255,0.01);
+            background-color: transparent;
             transition: all 0.2s;
-            border-radius: 4px;
-            letter-spacing: 0.2em;
+            letter-spacing: 0.1em;
         }
         .grab-zone:hover {
             background-color: rgba(255,255,255,0.25);
@@ -64,9 +73,9 @@
         .grab-zone:active { cursor: grabbing !important; }
 
         #timeline-ws-project ::part(region-handle) {
-            width: 40px !important; /* Larger interactive area */
+            width: 15px !important; /* Balanced interactive area */
             background-color: transparent !important;
-            z-index: 2147483647 !important;
+            z-index: 200 !important;
             cursor: col-resize !important;
             pointer-events: auto !important;
             display: flex !important;
@@ -442,25 +451,22 @@
             const speakerData = speakerWaveforms[seg.speaker];
             if (!speakerData || !speakerData.peaks || !projectWS) return;
 
-            // Use data model directly for reliability during rapid timeline updates
-            const sS = parseFloat(seg.source_start);
-            const tempo = parseFloat(seg.tempo || 1.0);
-
-            // WaveSurfer v7: actual px/sec from main timeline
+            // WaveSurfer v7: Use minPxPerSec directly for the scale
             const currentPxPerSec = projectWS.options.minPxPerSec;
 
-            if (targetContainer.offsetWidth === 0 && retryCount < 10) {
+            const clipper = targetContainer.closest('.mini-wave-clipper') || targetContainer;
+            if (clipper.offsetWidth === 0 && retryCount < 10) {
                 setTimeout(() => updateMiniWaveform(index, container, retryCount + 1), 100);
                 return;
             }
 
-            const pxPerSec = currentPxPerSec / tempo;
-            const totalWidth = speakerData.duration * pxPerSec;
-            const offset = -(sS * pxPerSec);
+            const sS = parseFloat(seg.source_start);
+            const tempo = parseFloat(seg.tempo || 1.0);
 
-            // Robust transformation strategy:
-            // 1. targetContainer is the CLIPPER (absolute inset-0)
-            // 2. We need a WAVE_HOLDER inside it that is transformed.
+            // Formula for Content Pinning:
+            const offset = -(sS / tempo) * currentPxPerSec;
+            const totalWidth = (speakerData.duration / tempo) * currentPxPerSec;
+
             let waveHolder = targetContainer.querySelector('.wave-holder');
             if (!waveHolder) {
                 waveHolder = document.createElement('div');
@@ -473,13 +479,14 @@
                 targetContainer.appendChild(waveHolder);
             }
 
-            waveHolder.style.width = totalWidth + 'px';
+            waveHolder.style.width = Math.ceil(totalWidth) + 'px';
             waveHolder.style.transform = `translate3d(${offset}px, 0, 0)`;
 
             let ws = projectMiniWaveforms[index];
 
             // If the WaveSurfer instance exists but its container is no longer in the DOM or is different, destroy it
-            if (ws && (!ws.getWrapper() || ws.getWrapper().parentElement !== waveHolder)) {
+            // In v7, we check the container directly via the renderer or options
+            if (ws && (ws.options.container !== waveHolder || !document.body.contains(ws.options.container))) {
                 ws.destroy();
                 ws = null;
                 delete projectMiniWaveforms[index];
@@ -639,6 +646,10 @@
                         jobAlignmentResults.forEach((_, idx) => updateMiniWaveform(idx));
                     });
 
+                    projectWS.on('interaction', () => {
+                        jobAlignmentResults.forEach((_, idx) => updateMiniWaveform(idx));
+                    });
+
                     projectWS.registerPlugin(WaveSurfer.Timeline.create({
                         height: 20,
                         insertPosition: 'beforebegin',
@@ -665,7 +676,8 @@
 
                         if (Math.abs(dS) > 0.0001 || Math.abs(dE) > 0.0001) {
                             const prevDur = prevState.end - prevState.start;
-                            const isMove = Math.abs((region.end - region.start) - prevDur) < 0.005;
+                            // Check if it's a move (both handles moved same amount) or resize
+                            const isMove = Math.abs(dS - dE) < 0.002;
 
                             isUpdatingFromTimeline = true;
 
@@ -674,10 +686,8 @@
                                 seg.csv_end = region.end;
                             } else {
                                 if (Math.abs(dS) > 0.0001) {
-                                    // REVEAL LOGIC: Discovery from minus.
-                                    // If we drag the IN handle to the left (dS < 0), we reveal earlier audio (source_start decreases).
-                                    // If we drag it to the right (dS > 0), we trim/hide audio (source_start increases).
-                                    // Formula: newSourceStart = oldSourceStart + (deltaCsv * tempo)
+                                    // REVEAL LOGIC:
+                                    // Adjust source_start to keep audio stationary on the global timeline.
                                     let newSS = seg.source_start + (dS * tempo);
 
                                     const minSS = 0;
@@ -839,20 +849,25 @@
                 const sColor = speakerColors[seg.speaker] || baseColors[0];
 
                 const content = document.createElement('div');
-                // Ensure content itself does not intercept clicks meant for the region/handles
-                content.className = "w-full h-full relative p-0 pointer-events-none flex flex-col justify-between rounded";
+                // The content wrapper allows handles to be interactive while waveforms are clipped
+                content.className = "w-full h-full relative p-0 pointer-events-none flex flex-col justify-between";
+
+                // Outer clipper for the waveform
+                const waveClipper = document.createElement('div');
+                waveClipper.className = "mini-wave-clipper";
 
                 const miniWaveContainer = document.createElement('div');
-                miniWaveContainer.className = "absolute inset-0 z-0 opacity-100 pointer-events-none overflow-hidden rounded";
+                miniWaveContainer.className = "absolute inset-0 z-0 opacity-100 pointer-events-none";
                 miniWaveContainer.id = `mini-wave-${index}`;
-                content.appendChild(miniWaveContainer);
+                waveClipper.appendChild(miniWaveContainer);
+                content.appendChild(waveClipper);
 
                 const uiOverlay = document.createElement('div');
                 uiOverlay.className = "relative z-10 w-full h-full flex flex-col justify-between pointer-events-none";
 
                 const grabZone = document.createElement('div');
                 grabZone.className = "grab-zone";
-                grabZone.innerHTML = 'MOVE';
+                grabZone.innerHTML = '<i class="fas fa-arrows-alt mr-1"></i>MOVE';
                 content.appendChild(grabZone);
 
                 const topRow = document.createElement('div');
