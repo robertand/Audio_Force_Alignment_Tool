@@ -275,29 +275,7 @@ def background_alignment(job_id, segments, speakers_to_process, audio_files_info
                         # Apply general post-processing
                         alignments = apply_alignment_post_processing(alignments, onsets)
 
-                        # Special case for VERY first segment: Force start at 0:00
-                        # and refine duration based on word count vs. onsets
-                        first_entry = alignments[0]
-                        first_aligned = first_entry.get('aligned')
-                        if first_aligned:
-                            # Force start of the first segment to be the first audio hump (crop leading silence)
-                            # But keep csv_start at 0 so it's placed at the track beginning
-                            first_onset = onsets[0] if len(onsets) > 0 else 0.0
-                            first_aligned['start'] = max(0, first_onset - 0.5) # Leave 0.5s padding
-                            first_entry['original']['start'] = 0.0 # Force csv_start
-
-                            # Count words in Romanian text
-                            words_ro = first_entry['original'].get('text_ro', '').split()
-                            word_count = len(words_ro)
-
-                            if word_count > 0:
-                                # If we have enough onsets, use them for end boundary
-                                if len(onsets) >= word_count:
-                                    target_onset_idx = min(word_count, len(onsets) - 1)
-                                    first_aligned['end'] = max(onsets[target_onset_idx], first_aligned['start'] + 0.1)
-                                else:
-                                    # Fallback: estimate duration based on words (e.g. 0.4s/word)
-                                    first_aligned['end'] = first_aligned['start'] + (word_count * 0.4)
+                        # (Removed special case for first segment to preserve absolute metadata timing)
                 except Exception as e:
                     logger.error(f"Hump-refinement failed for {speaker}: {e}")
 
@@ -502,7 +480,13 @@ def generate_final():
             job = JOBS.get(job_id)
             if not job:
                 return jsonify({'success': False, 'error': 'Job not found'}), 404
-            total_duration = job.get('total_duration', 0)
+
+            # Use the maximum csv_end from the adjusted alignments to determine project duration
+            # but ensure it's at least as long as the original job duration
+            total_duration = max(
+                max((float(seg['csv_end']) for seg in adjusted_data), default=0),
+                job.get('total_duration', 0)
+            )
 
         # Group by speaker
         speakers_segments = {}
@@ -637,9 +621,10 @@ def get_original_audio(job_id, speaker):
         if not job:
             return jsonify({'error': 'Job not found'}), 404
         
-        # Find audio file for speaker
+        # Find audio file for speaker (using sanitized speaker name as stored in filename)
+        safe_speaker = secure_filename(speaker)
         for file_info in job.get('files', []):
-            if speaker in file_info.get('path', ''):
+            if safe_speaker in file_info.get('path', ''):
                 return send_file(file_info['path'], mimetype='audio/wav')
         
         return jsonify({'error': 'Speaker audio not found'}), 404
@@ -653,8 +638,9 @@ def get_waveform_data(job_id, speaker):
             return jsonify({'error': 'Job not found'}), 404
 
         audio_path = None
+        safe_speaker = secure_filename(speaker)
         for file_info in job.get('files', []):
-            if speaker in file_info.get('path', ''):
+            if safe_speaker in file_info.get('path', ''):
                 audio_path = file_info.get('path')
                 break
 
@@ -712,7 +698,9 @@ def realign_segments():
                         job['results'][idx].update({
                             'source_start': adj['source_start'],
                             'source_end': adj['source_end'],
-                            'tempo': adj['tempo']
+                            'tempo': adj['tempo'],
+                            'csv_start': adj.get('csv_start', job['results'][idx]['csv_start']),
+                            'csv_end': adj.get('csv_end', job['results'][idx]['csv_end'])
                         })
 
             # Find all results and their original indices for this speaker
